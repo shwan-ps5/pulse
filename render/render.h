@@ -62,6 +62,8 @@ void postEnd();
 void setPalette(int id, bool swap);
 // The cover picture shown in a panel's art row: 256 x 256 RGB, or null for none.
 void setArt(const uint8_t *rgb);
+// A short message locked to the head, a metre ahead of the eyes at position p, orientation q (scene space).
+void hint(const Mat4 &vp, const float p[3], const float q[4], const char *line1, const char *line2);
 int paletteCount();
 const char *paletteName(int id);
 // The background colour for the song's current section and intensity.

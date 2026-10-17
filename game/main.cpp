@@ -101,7 +101,7 @@ void click(double now, int colour) {
 }
 
 // ---- state ----
-enum class Screen { Title, Select, Options, Playing, Results };
+enum class Screen { Title, Select, Options, Help, Playing, Results };
 Screen screen = Screen::Title;
 mapper::Song song;
 bool songLoaded = false;
@@ -113,7 +113,9 @@ game::SaberPose sabers[2] = {{{-0.25f, 1.0f, -0.35f}, {-0.25f, 1.0f, -1.35f}}, {
 bool autoplay = false, paused = false, quitRequested = false;
 std::vector<library::Entry> songs;
 std::string songId, songTitle, statusLine;
-int titleSel = 0, songSel = 0, pauseSel = 0, resultSel = 0, optionSel = 0;
+int titleSel = 0, songSel = 0, pauseSel = 0, resultSel = 0, optionSel = 0, helpPage = 0;
+std::string optionNote;
+bool userCentred = false;
 int paletteId = 0;
 bool paletteSwap = false;
 #ifdef PLATFORM_PS5
@@ -201,7 +203,9 @@ std::string clip(const std::string &s, size_t n) {
 
 void startSong() {
   const auto &notes = song.maps[diff].notes;
-  session = std::make_unique<game::Session>(notes);
+  game::Config cfg;
+  cfg.touchCuts = diff == 0;
+  session = std::make_unique<game::Session>(notes, cfg);
   bot = std::make_unique<game::Bot>(notes);
   effects.clear();
   playPos = (long)(-kLeadIn * audio::kRate);
@@ -291,8 +295,46 @@ void buildTitle() {
   panel.add("PULSE", 0.05f, 0);
   panel.add("RHYTHM SABERS", 0.014f, 3);
   panel.add(" ", 0.02f);
-  const char *items[3] = {"PLAY", "OPTIONS", "QUIT"};
-  for (int i = 0; i < 3; i++) panel.add(std::string(i == titleSel ? "> " : "  ") + items[i], 0.022f, i == titleSel ? 2 : 1);
+  const char *items[4] = {"PLAY", "HOW TO PLAY", "OPTIONS", "QUIT"};
+  for (int i = 0; i < 4; i++) panel.add(std::string(i == titleSel ? "> " : "  ") + items[i], 0.022f, i == titleSel ? 2 : 1);
+}
+
+constexpr int kHelpPages = 2;
+
+void buildHelp() {
+  panel.rows.clear();
+  panel.add(helpPage == 0 ? "HOW TO PLAY" : "SCORING AND CONTROLS", 0.026f, 0);
+  panel.add(" ", 0.008f);
+  auto head = [](const char *t) { panel.add(t, 0.015f, 4); };
+  auto line = [](const char *t) { panel.add(t, 0.0115f, 1); };
+  if (helpPage == 0) {
+    panel.add("CUT EACH BLOCK WITH THE SABER OF ITS COLOUR", 0.0115f, 3);
+    panel.add(" ", 0.006f);
+    head("EASY: DOTS");
+    line("CUT A DOT IN ANY DIRECTION, OR JUST TOUCH IT");
+    head("MEDIUM: LINES");
+    line("A LINE SHOWS THE WAY TO CUT, NOT WHICH END:");
+    line("CUT ALONG IT, UP OR DOWN, LEFT OR RIGHT, FOR");
+    line("FULL POINTS, OR ACROSS IT FOR HALF POINTS.");
+    line("HIT IT AND YOUR COMBO STAYS.");
+    head("HARD: ARROWS");
+    line("CUT THE WAY THE ARROW POINTS. THE WRONG WAY");
+    line("SCORES NOTHING AND BREAKS YOUR COMBO.");
+    head("EXTREME");
+    line("HARD WITH MORE BLOCKS, PAIRS AND FASTER RUNS");
+  } else {
+    line("A GOOD CUT SCORES UP TO 115 TIMES YOUR MULTIPLIER");
+    line("FAST, WIDE SWINGS AND CUTTING THE MIDDLE SCORE MORE");
+    line("MULTIPLIER: X2 AT 2 IN A ROW, X4 AT 6, X8 AT 14");
+    line("A MISS OR A BAD CUT RESETS IT");
+    panel.add(" ", 0.008f);
+    head("CONTROLS");
+    line("R3 CENTRES THE MENU     OPTIONS BUTTON PAUSES");
+    line("TRIANGLE ON SONG SELECT PICKS A NEW PATTERN");
+    line("OPTIONS: COLOUR-BLIND PALETTES, BACKGROUND, RESCAN");
+  }
+  panel.add(" ", 0.008f);
+  panel.add(std::string("LEFT RIGHT PAGE ") + std::to_string(helpPage + 1) + "/" + std::to_string(kHelpPages) + "     BACK TO RETURN", 0.009f, 3);
 }
 
 void buildOptions() {
@@ -300,11 +342,12 @@ void buildOptions() {
   panel.preview = true;
   panel.add("OPTIONS", 0.03f, 0);
   panel.add(" ", 0.012f);
-  const std::string rows[4] = {std::string("COLOURS   < ") + render::paletteName(paletteId) + " >", std::string("BACKGROUND   < ") + kBgNames[bgMode] + " >",
-                               std::string("SWAP HANDS   ") + (paletteSwap ? "ON" : "OFF"), "BACK"};
-  for (int i = 0; i < 4; i++) panel.add(std::string(i == optionSel ? "> " : "  ") + rows[i], 0.02f, i == optionSel ? 2 : 1);
+  const std::string rows[5] = {std::string("COLOURS   < ") + render::paletteName(paletteId) + " >", std::string("BACKGROUND   < ") + kBgNames[bgMode] + " >",
+                               std::string("SWAP HANDS   ") + (paletteSwap ? "ON" : "OFF"), "RESCAN MUSIC", "BACK"};
+  for (int i = 0; i < 5; i++) panel.add(std::string(i == optionSel ? "> " : "  ") + rows[i], 0.02f, i == optionSel ? 2 : 1);
   panel.add(" ", 0.012f);
-  panel.add("LEFT HAND BLOCK ON THE LEFT, RIGHT HAND ON THE RIGHT", 0.009f, 3);
+  if (optionNote.empty()) panel.add("LEFT HAND BLOCK ON THE LEFT, RIGHT HAND ON THE RIGHT", 0.009f, 3);
+  else panel.add(optionNote, 0.012f, 4);
 }
 
 void buildSelect() {
@@ -313,7 +356,8 @@ void buildSelect() {
   if (songs.empty()) {
     panel.add(" ", 0.012f);
     panel.add("NO SONGS FOUND", 0.018f, 5);
-    panel.add("PUT MP3 FILES IN THE SONGS FOLDER", 0.012f, 3);
+    panel.add("COPY MP3 FILES TO THE APP'S assets/songs FOLDER", 0.011f, 3);
+    panel.add("THEN OPTIONS, RESCAN MUSIC", 0.011f, 3);
     return;
   }
   const int n = (int)songs.size();
@@ -464,6 +508,7 @@ void refreshPanel() {
     case Screen::Title: buildTitle(); break;
     case Screen::Select: buildSelect(); break;
     case Screen::Options: buildOptions(); break;
+    case Screen::Help: buildHelp(); break;
     case Screen::Results: buildResults(); break;
     case Screen::Playing:
       havePanel = paused;
@@ -525,6 +570,15 @@ void drawEyes(const vr::Frame &f, double now) {
     quatToScene(f.eye[e].quat, q);
     glViewport(e * eye, 0, eye, eye);
     render::draw(frustum(f.eye[e].tan, 0.05f, 150.0f) * eyeView(p, q), sc, bg);
+    static const double started = platform::seconds();
+    if (!userCentred && screen != Screen::Playing && platform::seconds() - started < 40) {
+      float p0[3], p1[3], hq[4];
+      toScene(f.eye[0].pos, p0);
+      toScene(f.eye[1].pos, p1);
+      quatToScene(f.eye[0].quat, hq);
+      const float mid[3] = {(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2};
+      render::hint(frustum(f.eye[e].tan, 0.05f, 150.0f) * eyeView(p, q), mid, hq, "PRESS R3 TO CENTRE THE MENU", "LOOK STRAIGHT AHEAD FIRST");
+    }
   }
 }
 
@@ -612,6 +666,8 @@ int main(int argc, char **argv) {
     startSong();
   } else if (screenName && !std::strcmp(screenName, "select")) {
     screen = Screen::Select;
+  } else if (screenName && !std::strncmp(screenName, "help", 4)) {
+    screen = Screen::Help, helpPage = screenName[4] == '2' ? 1 : 0;
   } else if (screenName && !std::strcmp(screenName, "options")) {
     screen = Screen::Options;
   } else if (screenName && !std::strcmp(screenName, "results")) {
@@ -724,19 +780,25 @@ int main(int argc, char **argv) {
     const uint32_t padButtons = platform::pad().buttons, held = padButtons | sense;
     const uint32_t edge = held & ~last;
     last = held;
-    if (edge & (platform::BTN_R3 | platform::BTN_L3)) vr::recenter();
+    if (edge & (platform::BTN_R3 | platform::BTN_L3)) vr::recenter(), userCentred = true;
 
     switch (screen) {
       case Screen::Title:
-        step(titleSel, 3, nav);
+        step(titleSel, 4, nav);
         if (nav.select) {
           if (titleSel == 0) screen = Screen::Select;
-          else if (titleSel == 1) screen = Screen::Options, optionSel = 0;
+          else if (titleSel == 1) screen = Screen::Help, helpPage = 0;
+          else if (titleSel == 2) screen = Screen::Options, optionSel = 0, optionNote.clear();
           else quitRequested = true;
         }
         break;
+      case Screen::Help:
+        if (nav.left) helpPage = std::max(0, helpPage - 1);
+        if (nav.right || nav.select) helpPage = std::min(kHelpPages - 1, helpPage + 1);
+        if (nav.back || (nav.select && helpPage == kHelpPages - 1 && !nav.right)) screen = Screen::Title;
+        break;
       case Screen::Options: {
-        step(optionSel, 4, nav);
+        step(optionSel, 5, nav);
         const int dir = (nav.right ? 1 : 0) - (nav.left ? 1 : 0);
         if (optionSel == 0 && (dir || nav.select)) {
           paletteId = (paletteId + (dir ? dir : 1) + render::paletteCount()) % render::paletteCount();
@@ -748,6 +810,15 @@ int main(int argc, char **argv) {
           paletteSwap = !paletteSwap;
           saveSettings();
         } else if (optionSel == 3 && nav.select) {
+          const std::string keep = songs.empty() ? "" : songs[songSel].id;
+          songs = library::scan(dirs);
+          songSel = 0;
+          for (size_t i = 0; i < songs.size(); i++)
+            if (songs[i].id == keep) songSel = (int)i;
+          artFor.clear();
+          optionNote = songs.empty() ? "NO SONGS FOUND" : "FOUND " + std::to_string(songs.size()) + " SONGS";
+          platform::log("game: rescan, %zu songs", songs.size());
+        } else if (optionSel == 4 && nav.select) {
           screen = Screen::Title;
         }
         if (nav.back) screen = Screen::Title;

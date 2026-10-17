@@ -27,6 +27,7 @@ struct Config {
   float missAfter = 0.25f;    // s past its time a note is lost
   float swingWindow = 0.35f;  // s either side of its time a note can be cut
   bool noFail = true;
+  bool touchCuts = false;     // a dot cut by the right saber on contact, however slowly it moves (Easy)
 };
 
 enum class NoteState : unsigned char { Pending, Hit, BadCut, Missed };

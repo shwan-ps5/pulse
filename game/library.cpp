@@ -93,7 +93,9 @@ bool readIndex(const std::string &dir, std::vector<Entry> &list) {
 void scanDir(const std::string &dir, int depth, std::vector<Entry> &list) {
   DIR *d = opendir(dir.c_str());
   if (!d) {
-    if (depth == 0) readIndex(dir, list);
+    const int err = errno;
+    if (depth == 0 && readIndex(dir, list)) platform::log("library: %s: cannot list (errno %d), read index.txt", dir.c_str(), err);
+    else if (depth == 0 && err != ENOENT) platform::log("library: %s: cannot list (errno %d)", dir.c_str(), err);
     return;
   }
   while (dirent *e = readdir(d)) {

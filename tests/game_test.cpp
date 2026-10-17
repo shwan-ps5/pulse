@@ -97,6 +97,75 @@ int main() {
       std::printf("(no build/satisfaction/map.pulse, run pulse-map first; skipping the full-map test)\n");
     }
   }
+  // 8. The four levels as the in-game help describes them.
+  {
+    auto run = [&](const std::vector<mapper::Note> &truth, const std::vector<mapper::Note> &swing) {
+      Bot bot(swing);
+      return play(truth, [&](int c, double t) { return bot.pose(c, t); }, truth.back().time + 1.5);
+    };
+    auto seq = [&](std::initializer_list<int> dirs, int color = 0) {
+      std::vector<mapper::Note> v;
+      double t = 4.0;
+      for (int d : dirs) v.push_back({t, 1, 1, color, d}), t += 0.7;
+      return v;
+    };
+    // Easy: a dot takes a cut in any of the eight directions, for full points.
+    long full = 0;
+    for (int d = 0; d < 8; d++) {
+      Session s = run(seq({8}), seq({d}));
+      CHECK(s.stats().hits == 1 && s.stats().badCuts == 0, "dot cut along %d: %d hits %d bad", d, s.stats().hits, s.stats().badCuts);
+      if (d == 1) full = s.stats().score;
+    }
+    // Medium: a vertical line cut down or up scores in full, cut across for about half, and never breaks the combo.
+    for (int along : {1, 0}) {
+      Session s = run(seq({9}), seq({along}));
+      CHECK(s.stats().hits == 1 && s.stats().badCuts == 0 && s.stats().score > full * 9 / 10, "line along %d: score %ld vs %ld", along, s.stats().score, full);
+    }
+    for (int across : {2, 3}) {
+      Session s = run(seq({9}), seq({across}));
+      CHECK(s.stats().hits == 1 && s.stats().badCuts == 0, "line across %d: %d hits %d bad", across, s.stats().hits, s.stats().badCuts);
+      CHECK(s.stats().score > full * 4 / 10 && s.stats().score < full * 6 / 10, "line across %d scores %ld, half of %ld expected", across, s.stats().score, full);
+    }
+    {
+      Session s = run(seq({9, 9, 9, 9}), seq({1, 3, 1, 2}));
+      CHECK(s.stats().maxCombo == 4 && s.stats().badCuts == 0, "across cuts keep the combo: combo %d bad %d", s.stats().maxCombo, s.stats().badCuts);
+    }
+    // A diagonal line takes the diagonal, either way, in full; a flat swing through it is across.
+    {
+      Session along = run(seq({11}), seq({6})), flat = run(seq({11}), seq({3}));
+      CHECK(along.stats().score > full * 9 / 10 && flat.stats().hits == 1 && flat.stats().score < full * 6 / 10, "diagonal line: along %ld across %ld", along.stats().score, flat.stats().score);
+    }
+    // Hard: an arrow takes only its direction. A wrong cut scores nothing and drops the combo and multiplier.
+    {
+      Session s = run(seq({1, 1, 1, 1, 1, 1, 7}), seq({1, 1, 1, 1, 1, 1, 3}));
+      CHECK(s.stats().badCuts == 1 && s.stats().combo == 0 && s.stats().multiplier == 1 && s.stats().maxCombo == 6, "wrong arrow: bad %d combo %d x%d best %d", s.stats().badCuts,
+            s.stats().combo, s.stats().multiplier, s.stats().maxCombo);
+    }
+    {
+      Session sideways = run(seq({7}), seq({3})), opposite = run(seq({1}), seq({0}));
+      CHECK(sideways.stats().badCuts == 1 && sideways.stats().score == 0, "diagonal arrow cut flat is a bad cut: %d bad %ld", sideways.stats().badCuts, sideways.stats().score);
+      CHECK(opposite.stats().badCuts == 1 && opposite.stats().score == 0, "down arrow cut up is a bad cut: %d bad %ld", opposite.stats().badCuts, opposite.stats().score);
+    }
+  }
+  // 9. Easy: a saber held still in front of a dot cuts it, but not for other notes or the wrong colour.
+  {
+    Config touch;
+    touch.touchCuts = true;
+    auto held = [&](const std::vector<mapper::Note> &notes, const Config &cfg, int heldColor) {
+      Session s(notes, cfg);
+      for (double t = 0; t < 6.0; t += 1.0 / 90) {
+        const SaberPose p[2] = {heldColor == 0 ? still(-0.3f, 1.55f) : still(-1.5f, 0.2f), heldColor == 1 ? still(-0.3f, 1.55f) : still(1.5f, 0.2f)};
+        s.update(t, p);
+      }
+      return s.stats();
+    };
+    const Stats dot = held({{5.0, 1, 1, 0, 8}}, touch, 0);
+    CHECK(dot.hits == 1 && dot.badCuts == 0, "held saber on a dot: %d hits %d bad %d miss", dot.hits, dot.badCuts, dot.misses);
+    CHECK(held({{5.0, 1, 1, 0, 8}}, Config(), 0).hits == 0, "held saber without touch cuts should miss");
+    CHECK(held({{5.0, 1, 1, 0, 1}}, touch, 0).hits == 0, "held saber on an arrow should still miss");
+    const Stats wrong = held({{5.0, 1, 1, 0, 8}}, touch, 1);
+    CHECK(wrong.hits == 0 && wrong.badCuts == 0, "wrong colour held still: %d hits %d bad", wrong.hits, wrong.badCuts);
+  }
   std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures ? 1 : 0;
 }

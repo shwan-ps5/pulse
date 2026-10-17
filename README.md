@@ -15,18 +15,28 @@ The release carries one generated demo song, "Neon Run".
 
 ## Adding your own music
 
-Put MP3s (any folders) in `PPSA99993/assets/songs/`. The title may not be allowed to list folders on the console,
-so also list them in `assets/songs/index.txt`: run `python3 tools/make-index.py <path to assets/songs>` on a PC,
-or write one relative path per line by hand. Songs are read by their ID3 tags (artist, title, cover picture) and
-fall back to the file name. Tracks over about 17 minutes are skipped. Maps are cached in `/download0/cache`
-the first time a song is played.
+Copy MP3s (in any folders) into `PPSA99993/assets/songs/`, then choose **Options, Rescan Music** in the game: new
+songs appear in the list without restarting. Songs are read by their ID3 tags (artist, title, cover picture) and
+fall back to the file name. Tracks over about 17 minutes are skipped. Maps are cached in `/download0/cache` the
+first time a song is played.
+
+If the console will not let the title list a folder, Rescan finds nothing. In that case list the files in
+`assets/songs/index.txt`, one relative path per line: `python3 tools/make-index.py <path to assets/songs>` writes it.
 
 ## Playing
 
-Triggers and sticks navigate the menus; Triangle picks a new pattern for a song, Options opens the settings
-(saber colours with colour-blind and high-contrast palettes, hand swap, and the background: off, flat or 3D).
-Dots can be cut any way (Easy); lines take any cut, across them for half points (Medium); arrows need the right
-direction and a wrong one breaks the combo (Hard, Extreme).
+Stick or D-pad and the trigger navigate the menus. If the menu starts off to one side, look straight ahead and press
+R3 to centre it (a hint shows until you do). **How to play** in the title menu explains the rules; in short:
+
+- **Easy**: dots, cut in any direction, or just touched with the right saber.
+- **Medium**: lines. Cut along a line either way for full points, or across it for half. The combo is never broken
+  by direction.
+- **Hard**: arrows. Cut the way the arrow points; the wrong way scores nothing and breaks the combo.
+- **Extreme**: Hard with more blocks, pairs and faster runs.
+
+A cut scores up to 115 times the multiplier (x2 at 2 in a row, x4 at 6, x8 at 14); a miss or a bad cut resets it.
+Triangle on the song list picks a new pattern for a song. Options has colour-blind and high-contrast palettes, a
+hand swap, and the background: off, flat or 3D.
 
 ## Building
 

@@ -749,6 +749,18 @@ void postEnd() {
 
 bool init() { return initGfx(); }
 
+void hint(const Mat4 &vp, const float p[3], const float q[4], const char *line1, const char *line2) {
+  const Mat4 m = translation(p[0], p[1], p[2]) * rotation(q) * translation(0, -0.34f, -1.1f);
+  const float back[3] = {0.04f, 0.05f, 0.09f}, gold[3] = {1.0f, 0.8f, 0.2f}, white[3] = {0.9f, 0.92f, 1.0f}, none[3] = {0, 0, 0};
+  glDisable(GL_DEPTH_TEST);
+  solid(vp, m * translation(0, 0, -0.01f) * scale(1.05f, 0.24f, 0.004f), gfx.cubeVao, 36, back, 0.0f, 0.0f, none);
+  TextBatch tb;
+  addText(tb, line1, 0, 0.045f, 0, 0.06f, gold);
+  addText(tb, line2, 0, -0.045f, 0, 0.034f, white);
+  flushText(vp * m, tb);
+  glEnable(GL_DEPTH_TEST);
+}
+
 void setArt(const uint8_t *rgb) {
   haveArt = rgb != nullptr;
   if (!rgb) return;

@@ -177,7 +177,8 @@ void Session::update(double now, const SaberPose saber[2]) {
     for (int c = 0; c < 2 && state_[i] == NoteState::Pending; c++) {
       const auto &h = history_[c];
       const float speed = length(vel[c]);
-      if (h.size() < 2 || speed < cfg_.minSwingSpeed) continue;
+      const bool touchOk = cfg_.touchCuts && n.dir == 8 && n.color == c;
+      if (h.size() < 2 || (speed < cfg_.minSwingSpeed && !touchOk)) continue;
       // The blade at now and a little before it, so a fast swing that passed through between two frames is seen.
       const SaberPose &a = h[h.size() - 2].p, &b = h.back().p;
       bool touched = false;
