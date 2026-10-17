@@ -55,7 +55,7 @@ int main() {
     Session s = play(notes, [&](int c, double t) { return bot.pose(c, t); }, 6.0);
     CHECK(s.stats().badCuts == 1 && s.stats().hits == 0, "wrong colour: %d hits %d bad", s.stats().hits, s.stats().badCuts);
   }
-  // 4. The right saber swung the wrong way (up through a down note) is a bad cut.
+  // 4. The correct saber swung the wrong way (up through a down note) is a bad cut.
   {
     std::vector<mapper::Note> notes = {{5.0, 1, 1, 0, 1}};
     std::vector<mapper::Note> up = {{5.0, 1, 1, 0, 0}};

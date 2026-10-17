@@ -28,7 +28,7 @@ If the console will not let the title list a folder, Rescan finds nothing. In th
 Stick or D-pad and the trigger navigate the menus. If the menu starts off to one side, look straight ahead and press
 R3 to centre it (a hint shows until you do). **How to play** in the title menu explains the rules; in short:
 
-- **Easy**: dots, cut in any direction, or just touched with the right saber.
+- **Easy**: dots, cut in any direction, or just touched with the correct saber (the one matching the block's colour).
 - **Medium**: lines. Cut along a line either way for full points, or across it for half. The combo is never broken
   by direction.
 - **Hard**: arrows. Cut the way the arrow points; the wrong way scores nothing and breaks the combo.
