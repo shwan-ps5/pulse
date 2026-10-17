@@ -55,7 +55,7 @@ Rank: rating = 50*hitShare + 50*min(1, accuracy%/60); S>=90 A80 B70 C50 D40 E30 
 "id[~seed]:diff score acc combo plays [rating]"; blade-axis.txt; cache/*.pulse. Songs: `/app0/assets/songs/**.mp3` (+ optional index.txt).
 .pulse format: see mapper.cpp write()/read(). index.txt: "relative/path.mp3[<TAB>bytes]" per line.
 
-## console hazards (all observed on hardware; do not relearn them)
+## console hazards (all observed on hardware; do not relearn them; the full platform notes are in docs/PS5-VR2-NOTES.md)
 - Title sandbox: opendir() returns EPERM for /mnt, /mnt/usb0, /data, /download0 (fopen of files works). Listing /app0 is unverified
   (the game logs "cannot list ... errno N" per dir). index.txt is the fallback. Do not rely on directory listing outside /app0.
 - Heap: runtime default 128 MiB; main.cpp defines `ps5_opengl_heap_size`=1 GiB (falls back by halving). Free the previous song before

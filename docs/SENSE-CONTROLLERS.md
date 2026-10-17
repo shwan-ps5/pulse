@@ -73,8 +73,8 @@ w = 1.08), and it sits in a different frame from the tracker's quaternion (diffe
 tracker pose for orientation; the gyro (bytes 40-51) looks sane if a swing speed is wanted.
 
 ## Things not done or not known
-- Haptics on the Sense controllers (adaptive trigger / rumble): not tried. `vr::vibrate` only drives the
-  headset's rumble motor (`sceHmd2SetVibration`, 0-25).
+- Haptics on the Sense controllers: `vr::haptic` starts a buzz with `scePadSetVibration` and stops it 60 ms later; not yet
+  confirmed to be felt. Adaptive triggers: not tried. `vr::vibrate` drives the headset's rumble motor (`sceHmd2SetVibration`, 0-25).
 - Finger touch / proximity sensing: not decoded (probably in the touch fields after offset 52).
 - Left Create bit.
 - Latency of pose versus the display: not measured.
