@@ -37,6 +37,18 @@ Needs the PS5 OpenGL SDK, the native app boilerplate and the payload SDK checked
 - `make play` runs the desktop version (SDL, keyboard or gamepad), `make test` the unit tests.
 - Art: `tools/makeart.py`; demo song: `tools/makedemo.py` (both need a venv with numpy and pillow).
 
+## Thanks
+
+Pulse stands on a lot of other people's work:
+
+- [ps5-opengl](https://github.com/blackbearreloaded/ps5-opengl) and the [native app boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate), by BlackBearReloaded: OpenGL 4.6 on the PS5 and the app packaging. Without them there is no picture.
+- The [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) and everyone behind the PS5 jailbreak, for the toolchain and the way in.
+- [PS5VR](https://github.com/theghostonline/PS5VR), by theghostonline: the PS VR2 headset, Sense controller and audio output handling that `platform/vr_ps5.cpp` follows.
+- [Mesa](https://www.mesa3d.org/) and the OpenGNM projects, which ps5-opengl is built on.
+- ShadowMountPlus, for mounting the app from a USB stick.
+- The [PS5 homebrew catalog](https://github.com/blackbearreloaded/ps5-homebrew-catalog), also by BlackBearReloaded, for somewhere to list it.
+- [minimp3](https://github.com/lieff/minimp3) by lieff, [stb_image](https://github.com/nothings/stb) by Sean Barrett, and the DejaVu fonts (Bitstream Vera).
+
 ## Licence
 
 GPL-3.0-or-later, because the PS5 OpenGL runtime it links is. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.
