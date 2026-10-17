@@ -13,7 +13,9 @@ No release has been published yet: it is still in testing. Until then, build the
 1. Copy the `PPSA99993` folder from the release zip to your mounted app location (for example `/mnt/usb0/PPSA99993`).
 2. Start the jailbreak and mount it as usual, then launch Pulse from the home screen.
 
-The release carries one generated demo song, "Neon Run".
+The release carries one generated demo song, "Neon Run". It makes no network connections and does not ask for any
+extra privileges; the catalog's release scan (`python3 -m catalog scan --zip <zip> PPSA99993`) finds no way out of the
+sandbox in it. Development builds (`ps5/build.sh`) can also send their log to a PC.
 
 ## Adding your own music
 
@@ -41,6 +43,9 @@ Triangle on the song list picks a new pattern for a song. Options has colour-bli
 hand swap, and the background: off, flat or 3D.
 
 ## Building
+
+Developers and AI assistants: start with `AGENTS.md` (how it works, coordinate spaces, console hazards, how to build another
+PS VR2 game on this base). The code comments are written in a compact contract style for that purpose.
 
 Needs the PS5 OpenGL SDK, the native app boilerplate and the payload SDK checked out as `ps5/build.sh` describes.
 

@@ -1,3 +1,9 @@
+// ID3v2 reading for the song list: artist/title text and the embedded cover picture; plus tidying names for display.
+// scope: v2.2/2.3/2.4 frames TT2/TIT2, TP1/TPE1, PIC/APIC; text encodings ISO-8859-1, UTF-16 (+BOM), UTF-16BE, UTF-8.
+// output text is ASCII-ish: Latin-1 letters folded, Cyrillic A-ya kept as UTF-8 (the font atlas has them), other non-ASCII
+//   becomes '?'. display(): "Artist - Title", from tags else file name; strips track numbers, URLs, "(1)" copy marks, splits
+//   squashed "Artist-Title(Mix)" names. cover(): JPEG/PNG only (stb_image, no stdio) cropped square to kArtSize^2 RGB.
+// !: tag frames can be huge; walk() caps at 16 MiB and cover at 12 MiB. never trust sizes: all reads are bounds-checked.
 #include "tags.h"
 
 #include <algorithm>
@@ -18,6 +24,8 @@ namespace {
 // Latin-1 letters from 0xC0 up, as plain ASCII.
 const char kFold[] = "AAAAAAACEEEEIIIIDNOOOOO*OUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
 
+// append codepoint cp to out: printable ASCII as is, ` and the acute accent as ', Latin-1 letters folded to ASCII via kFold,
+// dashes to '-', Cyrillic А-я/Ё/ё as UTF-8, everything else >=0x100 as '?', control chars as space.
 void put(std::string &out, unsigned cp) {
   if (cp == 0x60 || cp == 0xB4) out += '\'';
   else if (cp >= 0x20 && cp < 0x7F) out += (char)cp;
@@ -31,6 +39,7 @@ void put(std::string &out, unsigned cp) {
   else out += ' ';
 }
 
+// ID3 text frame body (first byte = encoding 0 Latin-1, 1 UTF-16+BOM, 2 UTF-16BE, 3 UTF-8) -> display text via put().
 std::string decode(const uint8_t *d, size_t n) {
   std::string out;
   if (n < 1) return out;
@@ -63,6 +72,7 @@ std::string decode(const uint8_t *d, size_t n) {
   return out;
 }
 
+// token looks like a web address (http, www., ://, or a known TLD suffix / 'tld/' inside). used to drop site spam from names.
 bool isUrl(std::string t) {
   while (!t.empty() && std::strchr("([{<\"'", t.front())) t.erase(0, 1);
   while (!t.empty() && std::strchr(")]}>\"',;:", t.back())) t.pop_back();
@@ -79,6 +89,7 @@ bool isUrl(std::string t) {
 }
 
 // Drops web addresses (and the brackets left empty), underscores and doubled spaces.
+// drops URL tokens, '_' -> space, empty ()[]{} pairs, leading/trailing space, '-' and quote, doubled spaces.
 std::string tidy(const std::string &in) {
   std::string s = in;
   for (char &c : s)
@@ -105,6 +116,7 @@ std::string tidy(const std::string &in) {
 }
 
 // A track number at the front: "01 ", "03. ", "1 - ", "07)".
+// strips a leading track number ('01 ', '03. ', '1 - ', '07)'); leaves plain numbers that are part of the title ('22 x A').
 std::string noTrackNumber(const std::string &s) {
   size_t i = 0;
   while (i < s.size() && std::isdigit((unsigned char)s[i])) i++;
@@ -121,6 +133,7 @@ std::string noTrackNumber(const std::string &s) {
 }
 
 // "BeckyHill-LastTime(BiscitsMix)" with no spaces at all becomes "Becky Hill - Last Time (Biscits Mix)".
+// no-space names only: 'BeckyHill-LastTime(Mix)' -> 'Becky Hill - Last Time (Mix)' (split on first '-', camelCase and '(').
 std::string unsquash(const std::string &s) {
   if (s.find(' ') != std::string::npos || s.size() < 6) return s;
   std::string out;
@@ -143,17 +156,23 @@ std::string unsquash(const std::string &s) {
 }
 
 // A trailing copy marker: "Title (1)".
+// removes a trailing ' (N)' duplicate marker.
 std::string noCopyMark(std::string s) {
   const size_t p = s.rfind(" (");
   if (p != std::string::npos && p + 4 >= s.size() && s.back() == ')' && std::isdigit((unsigned char)s[p + 2]) && s.size() - p <= 5) s.erase(p);
   return s;
 }
 
+// big-endian u32.
 uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
+// ID3 sync-safe integer (7 bits per byte).
 uint32_t safe32(const uint8_t *p) { return (uint32_t)(p[0] & 127) << 21 | (p[1] & 127) << 14 | (p[2] & 127) << 7 | (p[3] & 127); }
 
 // Walks the frames of the ID3v2 tag, handing each wanted one to `take(id, bytes)`.
 template <class F>
+// visits each frame of the file's ID3v2 tag: take(id, size, FILE*, body) returns true if it consumed the frame body
+// (else walk seeks past it). false if the file has no ID3v2 tag. handles v2.2 6-byte and v2.3/2.4 10-byte frame headers
+// and an extended header.
 bool walk(const char *path, F take) {
   FILE *f = std::fopen(path, "rb");
   if (!f) return false;
@@ -186,6 +205,7 @@ bool walk(const char *path, F take) {
 
 }  // namespace
 
+// artist (TPE1/TP1) and title (TIT2/TT2), tidied; strings > 2 KiB ignored. false when no ID3v2 tag.
 bool read(const char *path, Info &out) {
   return walk(path, [&](const char *id, uint32_t size, FILE *f, std::vector<uint8_t> &body) {
     const bool isTitle = !std::strcmp(id, "TIT2") || !std::strcmp(id, "TT2"), isArtist = !std::strcmp(id, "TPE1") || !std::strcmp(id, "TP1");
@@ -197,6 +217,8 @@ bool read(const char *path, Info &out) {
   });
 }
 
+// song-list name. rule order: tags artist+title (title stripped of a repeated 'Artist - ' prefix) -> file name if it holds
+// ' - ' -> artist + file -> title or file. pinned by manual checks against ~300 real files.
 std::string display(const Info &t, const std::string &stem) {
   std::vector<uint8_t> utf8;
   utf8.push_back(3);
@@ -210,6 +232,7 @@ std::string display(const Info &t, const std::string &stem) {
   return title.empty() ? file : title;
 }
 
+// embedded picture (APIC/PIC) decoded and box-resampled to kArtSize x kArtSize RGB from the central square. false if none/unsupported.
 bool cover(const char *path, std::vector<uint8_t> &rgb) {
   std::vector<uint8_t> pic;
   walk(path, [&](const char *id, uint32_t size, FILE *f, std::vector<uint8_t> &body) {

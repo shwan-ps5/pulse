@@ -4,6 +4,16 @@
 // half-rate (60 fps) rendering, and one side-by-side eye buffer per frame described by a GPU texture
 // descriptor. Changes from PS5VR: eye positions for 3D scenes (it renders video at infinity), and
 // eye buffers that may be linear or tiled, at addresses the caller provides.
+//
+// The life of a VR title, in the order a game calls it (see vr.h for the API and game/main.cpp for a user):
+//   init(user)      once: load the libraries, open the headset and tracker, set up reprojection
+//   start(targets)  once the eye buffers exist: enter VR mode at 120 Hz
+//   each frame:     waitSlot() paces to the headset's 60 Hz render rate; begin(frame) gives the eye poses;
+//                   draw both eyes; hand(side, h) reads the controllers; submit() sends the picture
+//   stop()          on exit
+// The headset takes a picture rendered at the 60 Hz slot and re-warps it to the newest head pose twice per frame, so
+// small delays in drawing do not show as lag, but a missed slot does. Everything here talks to private system
+// libraries by structure layouts reverse-engineered by the PS5VR project; the offsets are firmware 13.60 only.
 
 #include <cmath>
 #include <cstdarg>
@@ -188,6 +198,8 @@ struct State {
 } g;
 
 void setStatus(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+// Records the outcome of the latest step for status() and writes it to the log; init() and start() call it
+// instead of failing silently, so the log says which step of bringing the headset up went wrong.
 void setStatus(const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
@@ -196,6 +208,9 @@ void setStatus(const char *fmt, ...) {
   platform::log("vr: %s", g.status);
 }
 
+// Loads one of the console's VR libraries twice over: sceSysmoduleLoadModule registers it with the system, and
+// sceKernelLoadStartModule maps it from the system library folder (named by the sandbox's random word) to get a
+// handle we can look functions up in. Returns that handle, negative on failure.
 int loadSysmodule(uint32_t id, const char *name) {
   int rc = sceSysmoduleLoadModule(id);
   char path[128];
@@ -206,6 +221,9 @@ int loadSysmodule(uint32_t id, const char *name) {
   return h;
 }
 
+// The load address of module `h`, used only when its functions cannot be found by name. The module must be the
+// expected file, and a known string must sit at its known offset in an executable segment; any mismatch returns 0,
+// so a firmware with different offsets never has fixed addresses called blindly.
 uintptr_t moduleBase(int h, const char *file, const ExportAnchor &anchor) {
   module_info_t mi;
   std::memset(&mi, 0, sizeof mi);
@@ -224,6 +242,8 @@ uintptr_t moduleBase(int h, const char *file, const ExportAnchor &anchor) {
   return 0;
 }
 
+// Fills each function pointer in `slots`: by name through sceKernelDlsym when the module exports it, otherwise at
+// base + offset from `table` (the offsets are firmware 13.60 only). False if any function stays unresolved.
 bool resolve(int h, const char *file, Slot *slots, size_t n, const ExportSig *table, size_t tableN,
              const ExportAnchor &anchor) {
   uintptr_t base = 0;
@@ -246,6 +266,8 @@ bool resolve(int h, const char *file, Slot *slots, size_t n, const ExportSig *ta
   return ok;
 }
 
+// Memory the headset's libraries can use: CPU-and-GPU-visible direct memory, 64 KiB aligned and zeroed. These
+// libraries refuse ordinary malloc memory. Returns null if the console has none to give.
 void *directAlloc(size_t size, size_t align) {
   size = (size + 0xffff) & ~(size_t)0xffff;
   int64_t off = 0;
@@ -293,6 +315,10 @@ bool buildTsharp(uint32_t out[8], uint64_t addr, uint32_t width, uint32_t height
 
 }  // namespace
 
+// Opens the headset for `user`: loads the Hmd2 and VrTracker2 libraries, reads the field of view, opens the
+// headset, starts the tracker (profile 0) and the reprojection that re-warps each frame to the latest head pose.
+// Runs once; later calls return the first result. Each failure sets status() and returns false, in which case the
+// game carries on with the flat TV view.
 bool init(int user) {
   g.user = user;
   if (g.loaded) return true;
@@ -383,6 +409,9 @@ bool init(int user) {
   return true;
 }
 
+// Enters VR mode: describes the three eye buffers to the GPU (image descriptors), switches reprojection to 120 Hz,
+// opens the VR video port and registers the buffers as the layers shown. Also turns on the TV mirror so the TV
+// shows what the headset shows. After this the title must not present its own picture.
 bool start(const Targets &t) {
   if (g.active) return true;
   if (!g.loaded) return false;
@@ -454,6 +483,8 @@ bool start(const Targets &t) {
 
 void vibrate(float strength);
 
+// Leaves VR mode in the order the system needs: mirror off, VR mode off (the reprojection keeps reading the last
+// buffer until then), then release the buffers, retrying while the port still reports busy.
 void stop() {
   if (!g.active) return;
   vibrate(0);
@@ -497,6 +528,9 @@ float headingDeg(const float q[4]) {
   return std::atan2(-fx, -fz) * 57.29578f;
 }
 
+// Makes where the player is looking now the scene's forward direction, and the head's position the origin. Only
+// the heading (rotation about the vertical axis) is kept, so the scene stays level. Called by the game on R3, and
+// automatically after three seconds of tracking.
 void recenter() {
   float dp[3], dq[4], lq[4], rq[4];
   if (!g.loaded || !pose(0, dp, dq, lq, rq)) return;
@@ -516,6 +550,7 @@ void recenter() {
                 a * 57.29578f, left, right, device);
 }
 
+// The origin set by recenter(): a position and a yaw-only quaternion, for turning tracker space into scene space.
 void origin(float pos[3], float yaw[4]) {
   std::memcpy(pos, g.originPos, 12);
   std::memcpy(yaw, g.originYaw, 16);
@@ -523,6 +558,10 @@ void origin(float pos[3], float yaw[4]) {
 
 static void hapticTick();
 
+// Starts a frame: opens it with the reprojection (waiting if its queue is full), asks for the pose predicted for
+// the moment the frame will be shown, and fills `f` with both eyes' positions, orientations and frustum tangents.
+// Draw with exactly these poses so the reprojection can correct for any head movement since. Calling it again
+// before submit() re-reads the pose for the same frame. False if no frame can be started now.
 bool begin(Frame &f) {
   hapticTick();
   if (!g.active) return false;
@@ -568,6 +607,9 @@ bool begin(Frame &f) {
   return true;
 }
 
+// Finishes the frame opened by begin(): describes the picture and the pose it was rendered at, hands it to the
+// reprojection and flips the video port to this buffer. The GPU must already have finished writing the buffer
+// (vr_eyes::fill waits for that). Then the next of the three buffers becomes the one to draw into.
 void submit() {
   if (!g.frameOpen) return;
   g.frameOpen = false;
@@ -619,6 +661,9 @@ void openHands() {
 
 const char *status() { return g.status; }
 
+// Reads one Sense controller (0 left, 1 right): buttons, stick and trigger from the pad, and the position and
+// orientation from the tracker at the frame's predicted time. Returns false if the controller cannot be opened;
+// `tracked` stays false while the headset's cameras cannot see it. Call after begin().
 bool hand(int side, Hand &out) {
   std::memset(&out, 0, sizeof out);
   out.quat[3] = 1;
@@ -672,6 +717,7 @@ bool hand(int side, Hand &out) {
 static uint64_t hapticStop[2];
 static bool hapticOn[2];
 
+// A short buzz in a Sense controller: starts it now and schedules the stop 60 ms later (hapticTick).
 void haptic(int side, float strength) {
   if (side < 0 || side > 1 || g.padHandle[side] < 0) return;
   const uint8_t v = (uint8_t)std::lround(std::fmin(std::fmax(strength, 0.0f), 1.0f) * 255);
@@ -683,6 +729,7 @@ void haptic(int side, float strength) {
   hapticStop[side] = sceKernelGetProcessTime() + 60000;
 }
 
+// Stops any buzz whose time is up. Called at the start of each frame.
 static void hapticTick() {
   const uint64_t now = sceKernelGetProcessTime();
   for (int s = 0; s < 2; s++)
@@ -693,6 +740,7 @@ static void hapticTick() {
     }
 }
 
+// The headset's own rumble motor, 0 to 1 mapped onto the levels 0 to 25 it accepts.
 void vibrate(float strength) {
   // The headset's rumble motor takes 0 (off) to 25, as PS5VR drives it. Sent only on a change.
   static int last = -1;

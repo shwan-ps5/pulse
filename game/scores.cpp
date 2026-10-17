@@ -1,3 +1,6 @@
+// best score/accuracy/rating/combo/plays per (song id, difficulty), kept in a text file (STORAGE scores.txt).
+// line format: "<id>[~seed]:<diff> score accuracy combo plays [rating]"; rating optional (older files) = accuracy.
+// rating (0-100) = 50*hit share + 50*min(1, accuracy/60); rank letter S>=90 A80 B70 C50 D40 E30 F: pinned in game_test #10.
 #include "scores.h"
 
 #include <cstdio>
@@ -11,6 +14,7 @@ std::string file;
 std::map<std::string, Best> table;
 std::string key(const std::string &id, int d) { return id + ":" + std::to_string(d); }
 
+// rewrites the whole file (small); called on every record(). write failure is silent: scores just do not persist.
 void save() {
   if (FILE *f = std::fopen(file.c_str(), "w")) {
     for (const auto &kv : table)
@@ -20,6 +24,7 @@ void save() {
 }
 }  // namespace
 
+// loads the table from path (missing file = empty); path also where record() saves.
 void init(const std::string &path) {
   file = path;
   table.clear();
@@ -38,11 +43,13 @@ void init(const std::string &path) {
   std::fclose(f);
 }
 
+// best so far for (id,diff), zeros if never played.
 Best get(const std::string &id, int d) {
   auto it = table.find(key(id, d));
   return it == table.end() ? Best() : it->second;
 }
 
+// folds a run into the table (each field keeps its max, plays++) and saves. true when `score` beat the previous best.
 bool record(const std::string &id, int d, long score, float accuracy, float rating, int combo) {
   Best &b = table[key(id, d)];
   const bool best = score > b.score;

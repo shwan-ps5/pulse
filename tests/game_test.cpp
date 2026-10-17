@@ -34,6 +34,8 @@ static Session play(const std::vector<mapper::Note> &notes, F poseOf, double end
 
 static SaberPose still(float x, float y) { return {{x, y, -0.35f}, {x, y, -1.35f}}; }
 
+// each numbered block pins one rule; see core/game.cpp header. #8 = the four levels as the help screen states them, #9 = Easy touch
+// cuts, #10 = rank letters/boundaries. a failing CHECK prints file:line and the process exits 1 (make test).
 int main() {
   // 1. One red note, cut down by the bot: a hit, a decent score, then the follow-through finalises it.
   {

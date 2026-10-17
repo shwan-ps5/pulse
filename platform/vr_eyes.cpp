@@ -1,3 +1,7 @@
+// The eye buffers: the GL texture a game draws both eyes into, and the tiled memory the headset reads.
+// The picture goes GL texture -> compute shader -> mapped buffer in the GPU's own tile order -> headset. The
+// shader also flips the picture, because GL's rows run bottom-up and the headset's top-down. A game that draws
+// into framebuffer() with each eye in its half and then calls fill() needs nothing more from this file.
 #include "vr_eyes.h"
 
 #include <cstddef>
@@ -11,6 +15,7 @@ namespace vr_eyes {
 
 namespace {
 
+// The size now in use: EYE pixels square per eye, W x H for both side by side. make() may lower EYE.
 int EYE = 2048, W = EYE * 2, H = EYE;
 
 // GL's bottom-up rows into the headset's top-down ones, RGBA8 with red in the low byte, in the GPU's
@@ -20,6 +25,9 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D uSrc;
 layout(std430, binding = 1) writeonly buffer Dst { uint px[]; };
 uniform int uWidth, uHeight;
+// Byte offset of texel (x, y) inside the 64 KiB-block tiled layout: the bits of x and y are interleaved (XORed)
+  // into the position within a 128 x 128 block, and blocks follow each other row by row. The same function runs
+  // on the CPU in tiledOffsetCpu, for capture().
 uint tiledOffset(uint x, uint y) {
   uint o = ((y << 4) & 0x70u) ^ ((y << 5) & 0xf00u) ^ ((y << 9) & 0x1000u) ^ ((y << 8) & 0x4000u) ^
            ((x << 2) & 0xcu) ^ ((x << 5) & 0x380u) ^ ((x << 4) & 0x400u) ^ ((x << 6) & 0x800u) ^ ((x << 9) & 0xa000u);
@@ -33,17 +41,23 @@ void main() {
 }
 )";
 
+// The shader's tiledOffset on the CPU, so capture() can read the tiled buffer back as a normal picture.
 uint32_t tiledOffsetCpu(uint32_t x, uint32_t y) {
   const uint32_t o = ((y << 4) & 0x70u) ^ ((y << 5) & 0xf00u) ^ ((y << 9) & 0x1000u) ^ ((y << 8) & 0x4000u) ^ ((x << 2) & 0xcu) ^
                      ((x << 5) & 0x380u) ^ ((x << 4) & 0x400u) ^ ((x << 6) & 0x800u) ^ ((x << 9) & 0xa000u);
   return (((y >> 7) * ((W + 127) / 128) + (x >> 7)) << 16) + o;
 }
 
+// The side-by-side colour texture and its framebuffer, the copy program, and the mapped buffer holding all the
+// eye buffers. `stride` is one buffer's size; `alignOffset` skips to the first 64 KiB boundary.
 GLuint tex, fbo, copy, buffer;
 size_t stride, alignOffset;
 uint8_t *mappedBase;
 vr::Targets t{};
 
+// Creates the texture, framebuffer and eye buffers for `size` pixels per eye. The buffer is mapped persistently
+// and coherently because on the PS5 a mapped GL buffer is real direct memory at one address for the CPU, the GPU
+// and the headset. False if the console cannot give that much memory (the caller then tries a smaller size).
 bool make(int size) {
   EYE = size, W = size * 2, H = size;
   glCreateTextures(GL_TEXTURE_2D, 1, &tex);
@@ -77,6 +91,7 @@ bool make(int size) {
 
 }  // namespace
 
+// Compiles the copy shader and creates the buffers at 2048 pixels an eye, falling back to 1536. Safe to call twice.
 bool init() {
   if (fbo) return true;
   GLuint cs = glCreateShader(GL_COMPUTE_SHADER);
@@ -95,14 +110,19 @@ bool init() {
   return make(2048) || make(1536);
 }
 
+// Pixels per eye, square (2048, or 1536 if the larger size did not fit).
 int eye() { return EYE; }
 
+// Bind this to draw: both eyes side by side, the left eye in the left half.
 unsigned framebuffer() { return fbo; }
 
 unsigned texture() { return tex; }
 
+// What vr::start() needs: the three buffers' addresses and layout.
 const vr::Targets &targets() { return t; }
 
+// Copies the finished picture into eye buffer `b` and waits for the GPU, because the headset reads the buffer
+// the moment it is submitted, so a half-written copy would show.
 void fill(int b) {
   glUseProgram(copy);
   glBindTextureUnit(0, tex);
@@ -115,6 +135,8 @@ void fill(int b) {
   glFinish();
 }
 
+// Debug aid: writes buffer `b` as a half-size PPM by reading it back through the tiled layout, which shows
+// exactly what the headset was given.
 bool capture(int b, const char *path) {
   if (!mappedBase) return false;
   FILE *f = std::fopen(path, "wb");

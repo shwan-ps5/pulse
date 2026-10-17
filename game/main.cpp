@@ -6,6 +6,21 @@
 // Menus: stick or d-pad to move, trigger or Cross to choose, Circle to go back, Options pauses in a song.
 // DualSense in a song: Circle toggles the autoplay bot, Square cycles the controller axis the blade lies along.
 // R3 or a stick click recentres.
+// ARCH (how this file works; AGENTS.md has the repo map):
+//   one translation unit holds the app: globals (state), screen builders (build*) that fill `panel` rows, input (readNav),
+//   song load/play (loadSongEntry/playSong/startSong/finishRun), drawing (drawFlat TV/desktop, drawEyes headset) and main().
+//   screens: Title -> Select -> Playing -> Results, plus Options, Help. refreshPanel() rebuilds `panel` for the current screen
+//   every frame; render::draw shows it (1.6 m ahead). in song, `session` (game::Session) judges cuts; `bot` plays on desktop.
+// LOOP (main): poll -> vr::begin(f) -> read hands (vr::hand) -> sabers[] (scene space) -> readNav -> per-screen logic ->
+//   if frame: drawEyes + glFinish + vr_eyes::fill + vr::submit -> on console vr::waitSlot + continue (NO flat present in VR) ->
+//   else drawFlat + platform::swap. song time = playPos/48000 advanced by the audio thread (fill): audio clock drives everything.
+// THREADS: audio thread runs fill(): reads `track` under try_lock(trackLock), voices under try_lock(voiceLock); never blocks.
+//   main thread owns everything else. swapping `track` happens under trackLock.
+// STORAGE: console "/download0/" (persistent, writable), desktop "build/": settings.txt (palette swap bg), seeds.txt (id seed),
+//   scores.txt, blade-axis.txt, cache/ (maps). songs: dirs list in main(); /app0/assets/songs is the shipped location.
+// MEMORY (console, fixed heap, 1 GiB requested via ps5_opengl_heap_size): loadSongEntry frees the previous song BEFORE decoding.
+// !: in VR never call drawFlat/swap (flat bloom path crashed on console). loading screens go through drawEyes (see playSong).
+// !: log lines containing "error"/"failed"/"no such" raise console pop-ups; avoid those words in routine logs.
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -45,6 +60,7 @@
 namespace {
 
 // ---- the song ----
+// the decoded song: interleaved int16 stereo at audio::kRate. read by the audio thread, replaced by loadSongEntry.
 audio::Track track;
 #ifdef PLATFORM_PS5
 // The runtime's app heap defaults to 128 MiB; it falls back to smaller sizes if the console cannot map this much.
@@ -52,15 +68,20 @@ extern "C" const size_t ps5_opengl_heap_size = 1024u * 1024u * 1024u;
 extern "C" size_t ps5_opengl_heap_live_bytes(void);
 #endif
 std::mutex trackLock;  // held while the track is swapped for another song
+// next sample frame the audio thread will play (starts at -kLeadIn*kRate: silence lead-in). song time = playPos/kRate.
 std::atomic<long> playPos{0};
+// audio thread outputs sound only while true (false in menus, pause, results).
 std::atomic<bool> playing{true};
 std::mutex voiceLock;
+// a hit click: starts at sample `start`, sine at `freq` Hz with decay; pitch differs per hand.
 struct Voice {
   long start;
   float freq;
 };
 std::vector<Voice> voices;
 
+// audio callback (audio thread): song samples + any live hit clicks into `out` (interleaved stereo float). advances playPos.
+// !: must not block or allocate heavily: uses try_lock and skips a block rather than waiting.
 void fill(float *out, int frames) {
   std::memset(out, 0, sizeof(float) * 2 * frames);
   if (!playing) return;
@@ -94,6 +115,7 @@ void fill(float *out, int frames) {
   playPos = pos + frames;
 }
 
+// queue a hit click at song time `now` (main thread); drops the oldest if > 64 are pending.
 void click(double now, int colour) {
   std::lock_guard<std::mutex> lock(voiceLock);
   voices.push_back({(long)(now * audio::kRate), colour == 1 ? 1300.0f : 1900.0f});
@@ -101,6 +123,7 @@ void click(double now, int colour) {
 }
 
 // ---- state ----
+// which screen is active; drives refreshPanel() and the input switch in main().
 enum class Screen { Title, Select, Options, Help, Playing, Results };
 Screen screen = Screen::Title;
 mapper::Song song;
@@ -144,17 +167,20 @@ const char *kDiffLabels[4] = {"EASY", "MEDIUM", "HARD", "EXTREME"};
 const float kAxes[6][3] = {{0, 0, -1}, {0, 0, 1}, {0, 1, 0}, {0, -1, 0}, {1, 0, 0}, {-1, 0, 0}};
 const char *kAxisNames[6] = {"-z", "+z", "+y", "-y", "+x", "-x"};
 
+// pattern seed for a song (1 unless rerolled with Triangle); selects which cached map file is used.
 int seedOf(const std::string &id) {
   const auto it = seeds.find(id);
   return it == seeds.end() ? 1 : it->second;
 }
 
 // The key a song's scores are filed under: another pattern of the same song is its own table.
+// scores.txt key: the song id for seed 1, 'id~seed' otherwise.
 std::string scoreKey(const std::string &id) {
   const int sd = seedOf(id);
   return sd == 1 ? id : id + "~" + std::to_string(sd);
 }
 
+// reads settings.txt (palette, swap hands, background mode) and seeds.txt; applies the palette. missing files = defaults.
 void loadSettings() {
   if (FILE *f = std::fopen(STORAGE "settings.txt", "r")) {
     int p = 0, sw = 0, bg = bgMode;
@@ -172,6 +198,7 @@ void loadSettings() {
   render::setPalette(paletteId, paletteSwap);
 }
 
+// writes settings.txt and applies the palette to the renderer. call after any option change.
 void saveSettings() {
   render::setPalette(paletteId, paletteSwap);
   if (FILE *f = std::fopen(STORAGE "settings.txt", "w")) {
@@ -180,6 +207,7 @@ void saveSettings() {
   }
 }
 
+// writes seeds.txt (only non-default seeds).
 void saveSeeds() {
   if (FILE *f = std::fopen(STORAGE "seeds.txt", "w")) {
     for (const auto &kv : seeds)
@@ -188,12 +216,14 @@ void saveSeeds() {
   }
 }
 
+// 'm:ss' for the song info line.
 std::string clock(double seconds) {
   char b[16];
   std::snprintf(b, sizeof b, "%d:%02d", (int)seconds / 60, (int)seconds % 60);
   return b;
 }
 
+// truncates to n bytes with '..', backing up to a UTF-8 character boundary so Cyrillic never splits mid-glyph.
 std::string clip(const std::string &s, size_t n) {
   if (s.size() <= n) return s;
   size_t k = n - 2;
@@ -201,6 +231,7 @@ std::string clip(const std::string &s, size_t n) {
   return s.substr(0, k) + "..";
 }
 
+// (re)start the loaded song at the current `diff`: new Session (touchCuts on Easy) and Bot, clear fx, rewind audio to the lead-in.
 void startSong() {
   const auto &notes = song.maps[diff].notes;
   game::Config cfg;
@@ -215,6 +246,7 @@ void startSong() {
   platform::log("game: %s, %zu notes", kDiffNames[diff], notes.size());
 }
 
+// folds a Sense controller's buttons and stick into this frame's shared navigation inputs (either hand can drive menus).
 void takeSense(const vr::Hand &h) {
   sense |= h.buttons;
   if (std::fabs(h.stick[0]) > std::fabs(senseX)) senseX = h.stick[0];
@@ -222,10 +254,13 @@ void takeSense(const vr::Hand &h) {
 }
 
 // What the player asked for this frame, from either hand or the DualSense: moves and choices as presses.
+// menu intent this frame, as edge-triggered presses (not held): move, select, back, options/pause, reroll (Triangle).
 struct Nav {
   bool up = false, down = false, left = false, right = false, select = false, back = false, options = false, reroll = false;
 };
 
+// combines DualSense and Sense inputs into Nav. stick thresholds 0.6; select = Cross, either trigger; back = Circle or Create.
+// edge detection uses file-static previous states: call exactly once per frame.
 Nav readNav() {
   static bool pu, pd, pl, pr, ps, pb, po, pt;
   const platform::Pad pad = platform::pad();
@@ -241,11 +276,13 @@ Nav readNav() {
 }
 
 // Moves a menu cursor.
+// wraps a menu cursor on up/down presses.
 void step(int &sel, int count, const Nav &n) {
   if (n.up) sel = (sel + count - 1) % count;
   if (n.down) sel = (sel + 1) % count;
 }
 
+// which controller axis the blade lies along (kAxes): persisted in blade-axis.txt, cycled with Square. default -z.
 void loadBladeAxis() {
   if (FILE *f = std::fopen(STORAGE "blade-axis.txt", "r")) {
     int a = 0;
@@ -254,6 +291,7 @@ void loadBladeAxis() {
   }
 }
 
+// persists bladeAxis.
 void saveBladeAxis() {
   if (FILE *f = std::fopen(STORAGE "blade-axis.txt", "w")) {
     std::fprintf(f, "%d\n", bladeAxis);
@@ -262,6 +300,7 @@ void saveBladeAxis() {
 }
 
 // ---- tracker space to the scene: about the recentre point, level, the head's rest height at 1.6 m ----
+// tracker space -> scene space: subtract the recentre origin, undo its yaw, then lift so the rest head height is 1.6 m.
 void toScene(const float p[3], float out[3]) {
   float op[3], yaw[4];
   vr::origin(op, yaw);
@@ -271,6 +310,7 @@ void toScene(const float p[3], float out[3]) {
   out[1] += 1.6f;
 }
 
+// orientation quaternion tracker space -> scene space (undo the recentre yaw only; scene stays level).
 void quatToScene(const float q[4], float out[4]) {
   float op[3], yaw[4];
   vr::origin(op, yaw);
@@ -279,6 +319,7 @@ void quatToScene(const float q[4], float out[4]) {
 }
 
 // The saber a controller makes: the hilt at the controller, the blade along its chosen axis.
+// hilt at the controller, tip = hilt + 1 m along the chosen axis rotated by the controller orientation. scene space.
 game::SaberPose saberFrom(const vr::Hand &h) {
   float pos[3], q[4];
   toScene(h.pos, pos);
@@ -290,6 +331,7 @@ game::SaberPose saberFrom(const vr::Hand &h) {
 
 
 // ---- the screens ----
+// build* functions: fill `panel` rows {text,size,style} for a screen; selection shown by a '> ' prefix and style 2.
 void buildTitle() {
   panel.rows.clear();
   panel.add("PULSE", 0.05f, 0);
@@ -301,6 +343,7 @@ void buildTitle() {
 
 constexpr int kHelpPages = 2;
 
+// two-page rules/scoring/controls text. keep it in sync with core/game.cpp rules and scores.cpp ranks.
 void buildHelp() {
   panel.rows.clear();
   panel.add(helpPage == 0 ? "HOW TO PLAY" : "SCORING AND CONTROLS", 0.026f, 0);
@@ -338,6 +381,7 @@ void buildHelp() {
   panel.add(std::string("LEFT RIGHT PAGE ") + std::to_string(helpPage + 1) + "/" + std::to_string(kHelpPages) + "     BACK TO RETURN", 0.009f, 3);
 }
 
+// colours, background, swap hands, rescan music, back. optionNote shows the rescan result.
 void buildOptions() {
   panel.rows.clear();
   panel.preview = true;
@@ -351,6 +395,7 @@ void buildOptions() {
   else panel.add(optionNote, 0.012f, 4);
 }
 
+// song list (+-2 around the selection), cover art, difficulty, BPM/length (if analysed), pattern, best score.
 void buildSelect() {
   panel.rows.clear();
   panel.add("SELECT SONG", 0.026f, 0);
@@ -404,6 +449,7 @@ void buildSelect() {
   panel.add("TRIANGLE NEW PATTERN   TRIGGER PLAY", 0.009f, 3);
 }
 
+// pause menu rows.
 void buildPause() {
   panel.rows.clear();
   panel.add("PAUSED", 0.03f, 0);
@@ -411,6 +457,7 @@ void buildPause() {
   for (int i = 0; i < 4; i++) panel.add(std::string(i == pauseSel ? "> " : "  ") + items[i], 0.018f, i == pauseSel ? 2 : 1);
 }
 
+// rank (from rating), score, accuracy, hits/misses, new-best marker, then replay / new pattern / song select.
 void buildResults() {
   panel.rows.clear();
   panel.add("SONG COMPLETE", 0.03f, 0);
@@ -430,6 +477,8 @@ void buildResults() {
   for (int i = 0; i < 3; i++) panel.add(std::string(i == resultSel ? "> " : "  ") + items[i], 0.018f, i == resultSel ? 2 : 1);
 }
 
+// load+analyse a song into the globals. frees the previous song's memory first (finite console heap), then library::load.
+// false if it cannot be read. blocking (seconds): callers draw a loading frame first (playSong).
 bool loadSongEntry(const library::Entry &e) {
   // The console's heap is 256 MiB and fixed: let go of the last song before decoding the next.
   playing = false;
@@ -465,6 +514,7 @@ void drawFlat(double now);
 void drawEyes(const vr::Frame &f, double now);
 bool vrActive = false;
 
+// shows a LOADING panel (through drawEyes in VR, drawFlat on desktop), loads, then starts the song. false => statusLine set.
 bool playSong(const library::Entry &e) {
   panel.rows.clear();
   panel.add("LOADING", 0.026f, 0);
@@ -489,6 +539,7 @@ bool playSong(const library::Entry &e) {
   return true;
 }
 
+// end of song: compute accuracy and rating, record the score, switch to Results.
 void finishRun() {
   const game::Stats &st = session->stats();
   result.score = st.score, result.combo = st.maxCombo, result.hits = st.hits, result.misses = st.misses + st.badCuts;
@@ -519,6 +570,7 @@ void refreshPanel() {
   }
 }
 
+// snapshot of what render needs this frame: song time, session, song, notes speed, sabers, fx, panel (if havePanel).
 render::Scene sceneAt(double now) {
   render::Scene s;
   const bool inSong = screen == Screen::Playing || screen == Screen::Results;
@@ -529,6 +581,8 @@ render::Scene sceneAt(double now) {
   return s;
 }
 
+// the flat view (desktop window, TV in flat mode): draws through the bloom target with a camera placed from the panel size.
+// !: never call in VR on the console (see file header).
 void drawFlat(double now) {
   render::Scene sc = sceneAt(now);
   sc.maxZ = 1e9f;
@@ -554,6 +608,8 @@ void drawFlat(double now) {
   render::postEnd();
 }
 
+// the headset view: clear the side-by-side eye framebuffer, then render each eye in its half with its own frustum/pose from `f`;
+// also draws the head-locked R3 hint until the user recentres. background mode: no bloom here (cost).
 void drawEyes(const vr::Frame &f, double now) {
   const int eye = vr_eyes::eye();
   render::Scene sc = sceneAt(now);
@@ -584,6 +640,7 @@ void drawEyes(const vr::Frame &f, double now) {
   }
 }
 
+// dumps the current framebuffer as a PPM (rows flipped): for --shot test renders.
 bool writePpm(const char *path, int w, int h) {
   std::vector<unsigned char> px((size_t)w * h * 3);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -596,6 +653,7 @@ bool writePpm(const char *path, int w, int h) {
   return true;
 }
 
+// one status line to the log (score, combo, energy, hits...), every 5 s in play.
 void report(double now) {
   const game::Stats &st = session->stats();
   platform::log("game: %.1f s  score %ld  combo %d (best %d) x%d  energy %.0f%%  hit %d  miss %d  bad %d  %.1f%% of max", now, st.score, st.combo, st.maxCombo,
@@ -605,6 +663,9 @@ void report(double now) {
 
 }  // namespace
 
+// startup order matters: platform::init -> render::init -> settings/scores -> library::scan -> VR (vr::init, vr_eyes::init, depth
+// buffer on the eye framebuffer, vr::start) -> optional --screen/--shot/--video modes -> audio -> main loop. PS5 build ignores
+// argv and scans the fixed dirs list; desktop takes flags (see header comment).
 int main(int argc, char **argv) {
   bool wantVr = false, mouse = false, forceBot = false;
   const char *mp3Path = nullptr, *mapPath = nullptr, *shotPath = nullptr, *videoPath = nullptr, *screenName = nullptr;

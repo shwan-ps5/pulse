@@ -10,6 +10,10 @@
 
 namespace game {
 
+// contract: for each hand builds timed waypoints (time, x, y) from `notes`: before each note, start `reach` m back along
+// the cut axis (dir code; lines/dots resolved to alternating down/up via down_[]), end `reach` m past it, `lead` s before the
+// note time (blade touches first). pose(c,t) interpolates linearly; saber is a 1 m blade pointing -z at z=-0.35.
+// tests only: used to pin rules and to measure a perfect-player ceiling (52-72% accuracy by level).
 class Bot {
  public:
   Bot(const std::vector<mapper::Note> &notes, const Config &cfg = Config(), float lead = 0.03f, float reach = 0.8f, float swingTime = 0.09f)

@@ -53,6 +53,8 @@ static EGLContext context = EGL_NO_CONTEXT;
 static EGLint w, h;
 static int signedIn, padHandle = -1;
 
+// A pop-up on the console (and a line in the log). Before the first frame the log file is out of reach, so this is
+// how early failures become visible.
 void notify(const char *message) {
   static NotificationRequest req;
   std::strncpy(req.message, message, sizeof req.message - 1);
@@ -60,6 +62,8 @@ void notify(const char *message) {
   std::fprintf(stderr, "[notification] %s\n", message);
 }
 
+// Opens the user, the pad and a full-screen OpenGL 4.6 core surface through ps5-opengl's EGL. The display mode
+// is set before EGL starts. `title` and `hidden` do nothing on the console. False, with a pop-up, if EGL fails.
 bool init(const char *title, int width, int height, bool hidden) {
   (void)title, (void)hidden;
   static const EGLint config[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_RED_SIZE, 8,
@@ -128,6 +132,7 @@ void shutdown() {
 
 uint32_t buttons() { return pad().buttons; }
 
+// The DualSense held by the signed-in user: buttons, sticks mapped from bytes to -1..1, triggers 0..1.
 Pad pad() {
   PadData d;
   Pad p{};
@@ -141,6 +146,7 @@ Pad pad() {
 
 int user() { return signedIn; }
 
+// The signed-in user's name, or "PLAYER" if the system will not give it.
 const char *playerName() {
   static char name[32];
   if (!name[0] && sceUserServiceGetUserName(signedIn, name, sizeof name) != 0) std::strcpy(name, "PLAYER");
@@ -154,6 +160,8 @@ void (*audioFill)(float *, int);
 int audioPort = -1;
 constexpr int AUDIO_BLOCK = 256;
 
+// Runs forever on its own thread: asks the game's callback for a block of samples and hands it to the audio
+// port, whose output call blocks until the port wants more, which sets the pace.
 void *audioThread(void *) {
   static float block[AUDIO_BLOCK * 2];
   for (;;) {
@@ -164,6 +172,7 @@ void *audioThread(void *) {
 }
 }  // namespace
 
+// Opens the main audio port for stereo floats at `rate` Hz and starts the thread that feeds it from `fill`.
 bool startAudio(void (*fill)(float *out, int frames), int rate) {
   sceAudioOutInit();
   audioPort = sceAudioOutOpen(0xFF, 0, 0, AUDIO_BLOCK, (unsigned)rate, 4 /* FLOAT_STEREO */);
@@ -184,12 +193,14 @@ bool startAudio(void (*fill)(float *out, int frames), int rate) {
 int width() { return w; }
 int height() { return h; }
 
+// Seconds on the monotonic clock.
 double seconds() {
   timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+// Sleeps for about `ms` milliseconds.
 void sleepMs(int ms) {
   if (ms > 0) usleep((useconds_t)ms * 1000);
 }
@@ -197,9 +208,14 @@ void sleepMs(int ms) {
 // Every line also goes out as a UDP datagram to the PC (tools/logsrv.py), so the title can be watched
 // live: the host is loghost.txt in the title's /download0 (by FTP) or the one packaged at build time.
 namespace {
+#ifdef PULSE_RELEASE
+void logOut(const char *) {}
+#else
 int logSock = -2;
 sockaddr_in logDest;
 
+// Sends one log line as a UDP datagram to the PC named in loghost.txt (port 9023), if there is one; the first
+// call reads the file. Development builds only: a release build compiles this out and uses no network.
 void logOut(const char *line) {
   if (logSock == -2) {
     logSock = -1;
@@ -219,8 +235,11 @@ void logOut(const char *line) {
   }
   if (logSock >= 0) sendto(logSock, line, std::strlen(line), 0, (const sockaddr *)&logDest, sizeof logDest);
 }
+#endif
 }  // namespace
 
+// Logs a printf-style line to stderr (which the runtime writes to /download0/ps5-opengl.log) and to the live
+// log. Lines containing "error", "failed" or "no such" also pop up on the console.
 void log(const char *fmt, ...) {
   char line[1024];
   va_list ap;

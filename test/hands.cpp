@@ -225,6 +225,7 @@ void drawScene(const Mat4 &view, const Mat4 &proj) {
   drawBox(vp, translation(headPos[0], headPos[1], headPos[2]) * rotation(headQuat) * scale(0.18f, 0.22f, 0.2f), 0.9f, 0.7f, 0.2f);
 }
 
+// draws the floor grid, the head box and both sabers into the eye framebuffer for each eye.
 void drawEyes(const vr::Frame &f) {
   const int eye = vr_eyes::eye();
   glBindFramebuffer(GL_FRAMEBUFFER, vr_eyes::framebuffer());
@@ -275,6 +276,8 @@ void probeDir(const char *path, int depth, int &mp3Tried) {
   closedir(d);
 }
 
+// logs which of the likely storage paths the sandbox lets the title list/read (finding that opendir is refused on most is
+// why the shipped game reads songs/index.txt instead). tool, not part of the game.
 void probeStorage() {
   int mp3 = 0;
   for (const char *path : {"/download0", "/app0", "/mnt/usb0", "/mnt/usb1", "/mnt/usb2", "/usb0", "/usb1", "/data", "/mnt/ext0", "/mnt/ext1"}) {

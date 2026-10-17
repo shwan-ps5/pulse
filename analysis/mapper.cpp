@@ -1,3 +1,14 @@
+// analysis::Result -> 4 note maps (Easy..Extreme) + per-beat visual cues; .pulse text file read/write; map validator.
+// deterministic: (Result, seed) -> identical Song. seed per song stored in STORAGE seeds.txt (game/main.cpp), Triangle rerolls.
+// build() stages: (1) slot grid = each beat split p.subdivision ways, onset peaks snapped to nearest slot (score=strength,
+//   bass/mid/high at that frame); (2) per bar pick top-scoring slots, count = notesPerBeat*4*section factor (intro .5,
+//   break .15, outro .4, build ramps to 1+buildBoost, drop 1.25, else .7+.6*intensity), spaced >= minGap beats;
+//   (3) place notes: alternate hands, alternate down/up swing per hand, row from bass/high ratio, lane near hand's side,
+//   `fast` (<0.45 s since hand's last) limits movement to 1 lane/row, `blocked()` avoids the other hand's follow-through path,
+//   sideways swings (p.sideways) leave lastDown unchanged; drops open with a two-hand pair; Extreme adds same-time pairs;
+//   (4) styled(): remap dir codes by level. invariants (checked by validate()): time-ordered, hand gap >= 0.19 s,
+//   <= 1 lane per 0.1 s, no two notes in one cell at one time.
+// !: any change to stage logic or Profile values changes output => bump library::kMapperVersion (invalidates caches).
 #include "mapper.h"
 
 #include <algorithm>
@@ -15,6 +26,7 @@ const char *name(Difficulty d) {
 
 namespace {
 
+// xorshift32. seed mix in generate(): seed*2654435761 + difficulty*40503 + 1. uniform() in [0,1).
 struct Rng {
   uint32_t s;
   uint32_t next() {
@@ -25,6 +37,8 @@ struct Rng {
   int pick(int n) { return (int)(uniform() * n) % n; }
 };
 
+// per-level tuning. notesPerBeat in a steady bar; minGap beats between notes; subdivision slots/beat; buildBoost extra density
+// at end of a build; sideways = chance a swing is left/right (not up/down).
 struct Profile {
   float notesPerBeat;  // in a steady bar
   double minGap;       // beats between notes
@@ -33,6 +47,7 @@ struct Profile {
   float sideways;      // chance a swing goes left or right instead of up or down
 };
 
+// Easy .55/beat (dots), Medium 1.0 (lines), Hard 1.7 (arrows), Extreme 2.5 (+pairs). sideways 0/.3/.3/.35.
 Profile profile(Difficulty d) {
   switch (d) {
     case Difficulty::Easy: return {0.55f, 0.9, 1, 0.5f, 0.0f};
@@ -42,6 +57,7 @@ Profile profile(Difficulty d) {
   }
 }
 
+// a candidate note time on the beat grid. beatIndex indexes Result::beats; sub is the slot within the beat; bar -1 outside bars.
 struct Slot {
   double time;
   float score;   // strength of the onset that lands here, plus a pull toward strong beats
@@ -50,6 +66,7 @@ struct Slot {
   int bar;       // index into Result::bars, -1 outside
 };
 
+// index of the bar containing time t, or -1. linear scan (bars are few).
 int barAt(const analysis::Result &r, double t) {
   for (int i = 0; i < (int)r.bars.size(); i++)
     if (t >= r.bars[i].start && t < r.bars[i].end) return i;
@@ -57,11 +74,15 @@ int barAt(const analysis::Result &r, double t) {
 }
 
 // Directions in the "up" family are swung from below, the "down" family from above.
+// dir families: [0]=straight, [1..2]=slanted, [3..4]=sideways. a hand alternates families so swings flow.
 const int kUp[] = {0, 4, 5, 2, 3}, kDown[] = {1, 6, 7, 2, 3};
 
+// Section enum -> int stored in cues (visuals read it; 0 intro 1 steady 2 build 3 drop 4 break 5 outro).
 int sectionCode(Section s) { return (int)s; }
 
 // Easy cuts any way, Medium cuts along a line either way, Hard and Extreme cut the arrow's way.
+// final dir code per level: Easy -> 8 (dot); Medium -> line along the arrow's axis (9 vertical, 10 horizontal, 11 '/', 12 '\\');
+// Hard/Extreme keep the arrow (0-7).
 int styled(Difficulty d, int dir) {
   if (d == Difficulty::Easy) return 8;
   if (d != Difficulty::Medium) return dir;
@@ -69,6 +90,7 @@ int styled(Difficulty d, int dir) {
   return dir >= 0 && dir <= 8 ? axis[dir] : dir;
 }
 
+// one level's map. see file header for the stages. returns empty map if < 8 beats were found.
 Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
   const Profile p = profile(diff);
   Map m{diff, {}};
@@ -255,6 +277,7 @@ Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
 
 }  // namespace
 
+// 4 maps + cues (per beat: bass/mid/high level normalised to the song's peak, and the section) for the visuals.
 Song generate(const analysis::Result &r, unsigned seed) {
   Song s;
   s.bpm = r.bpm, s.duration = r.duration, s.downbeatPhase = r.downbeatPhase, s.beats = r.beats, s.bars = r.bars;
@@ -274,6 +297,7 @@ Song generate(const analysis::Result &r, unsigned seed) {
   return s;
 }
 
+// playability check; empty = fine. used by tools/pulse-map and tests. rules in file header.
 std::vector<std::string> validate(const Map &m) {
   std::vector<std::string> bad;
   char buf[160];
@@ -305,6 +329,8 @@ std::vector<std::string> validate(const Map &m) {
   return bad;
 }
 
+// .pulse text format v1: header 'pulse 1', bpm, duration, downbeat, 'bar start end section intensity', 'cue t bass mid high
+// section', then per map 'map <level> <n>' and 'n time lane row color dir' lines. cache files are exactly this.
 bool write(const Song &s, const char *path) {
   FILE *f = std::fopen(path, "w");
   if (!f) return false;
@@ -320,6 +346,7 @@ bool write(const Song &s, const char *path) {
   return true;
 }
 
+// parses write()'s format; tolerant of unknown lines. false if no header or no maps (treated as a cache miss).
 bool read(const char *path, Song &s) {
   FILE *f = std::fopen(path, "r");
   if (!f) return false;

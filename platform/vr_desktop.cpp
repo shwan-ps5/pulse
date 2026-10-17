@@ -26,6 +26,8 @@ void waitSlot() {}
 void simulate(float r, float d) { roll = r, dy = d; }
 void vibrate(float) {}
 
+// One frame of the simulated head: both eyes 64 mm apart at the origin, tilted by the simulated roll and raised by
+// the simulated height, with frustum tangents like the real headset's (wider outwards than inwards).
 bool begin(Frame &f) {
   // Right ear down: a turn about the view axis (-z), so about +z by -roll.
   const float q[4] = {0, 0, std::sin(-roll * 0.5f), std::cos(-roll * 0.5f)};
@@ -49,6 +51,7 @@ bool begin(Frame &f) {
 
 void submit() { buffer = (buffer + 1) % kBuffers; }
 void recenter() {}
+// The fixed origin: 1.6 m up and facing -z, so desktop scenes line up the way the headset's do after recentring.
 void origin(float pos[3], float yaw[4]) {
   for (int i = 0; i < 3; i++) pos[i] = originPos[i];
   for (int i = 0; i < 4; i++) yaw[i] = originYaw[i];
@@ -60,10 +63,12 @@ namespace {
 float handPos[2][3] = {{-0.25f, 1.0f, -0.35f}, {0.25f, 1.0f, -0.35f}}, handQuat[2][4] = {{0, 0, 0, 1}, {0, 0, 0, 1}};
 }
 void haptic(int, float) {}
+// The test hook: sets where hand `side` is, for bots and tests that move the sabers without a controller.
 void simulateHand(int side, const float pos[3], const float quat[4]) {
   std::memcpy(handPos[side], pos, 12);
   std::memcpy(handQuat[side], quat, 16);
 }
+// The simulated controller: always connected and tracked, at the position simulateHand last set, with no buttons.
 bool hand(int side, Hand &h) {
   std::memset(&h, 0, sizeof h);
   h.tracked = h.connected = true;

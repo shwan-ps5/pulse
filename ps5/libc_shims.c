@@ -6,12 +6,14 @@
 // no temporary-file support to offer.
 #include <errno.h>
 
+// reports 'not a terminal' (ENOTTY), which is the right answer on a console with no tty.
 int isatty(int fd) {
   (void)fd;
   errno = ENOTTY;
   return 0;
 }
 
+// refuses (ENOSYS): the title never needs temporary files.
 int mkstemp(char *path) {
   (void)path;
   errno = ENOSYS;

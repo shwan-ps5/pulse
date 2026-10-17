@@ -7,6 +7,7 @@ struct Mat4 {
   float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 };
 
+// Matrix product, column-major like OpenGL: a * b applies b first.
 inline Mat4 operator*(const Mat4 &a, const Mat4 &b) {
   Mat4 r;
   for (int c = 0; c < 4; c++)
@@ -18,6 +19,7 @@ inline Mat4 operator*(const Mat4 &a, const Mat4 &b) {
   return r;
 }
 
+// A matrix that moves by (x, y, z).
 inline Mat4 translation(float x, float y, float z) {
   Mat4 r;
   r.m[12] = x, r.m[13] = y, r.m[14] = z;
@@ -34,6 +36,7 @@ inline Mat4 rotation(const float q[4]) {
   return r;
 }
 
+// Rotates vector v by quaternion q into out.
 inline void rotate(const float q[4], const float v[3], float out[3]) {
   Mat4 r = rotation(q);
   for (int i = 0; i < 3; i++) out[i] = r.m[i] * v[0] + r.m[4 + i] * v[1] + r.m[8 + i] * v[2];
@@ -62,6 +65,7 @@ inline Mat4 frustum(const float tan[4], float near, float far) {
   return m;
 }
 
+// Quaternion product a * b (x, y, z, w order).
 inline void qmul(const float a[4], const float b[4], float o[4]) {
   const float r[4] = {
       a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],

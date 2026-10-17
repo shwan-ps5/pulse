@@ -1,3 +1,10 @@
+// song library: find mp3s, tidy titles, decode+analyse+map on demand, cache maps.
+// ids: id = hash(file stem + size) (12 hex), so renames of the folder keep ids but edits to the file change it.
+// cache: <cacheDir>/<id>.v<kMapperVersion>.s<seed>.pulse (mapper::write format). miss => decode + analyse + generate
+//   (~2-7 s on console) then write. bump kMapperVersion (library.h) whenever mapper/analysis output changes.
+// !: the console title sandbox refuses opendir() on most paths (EPERM, seen on /mnt/*, /data, /download0); fopen of files
+//   works. so scanDir falls back to readIndex(): <dir>/index.txt lines "relative/path.mp3[<TAB>size]" (tools/make-index.py).
+//   /app0/assets/songs (the app folder) is the supported location; listing there is expected but unverified.
 #include "library.h"
 
 #include <dirent.h>
@@ -18,12 +25,14 @@ namespace library {
 
 namespace {
 
+// case-insensitive '.mp3' suffix test.
 bool endsWithMp3(const std::string &n) {
   if (n.size() < 5) return false;
   const char *e = n.c_str() + n.size() - 4;
   return (e[0] == '.') && (e[1] | 32) == 'm' && (e[2] | 32) == 'p' && e[3] == '3';
 }
 
+// stable 48-bit FNV-style id from name stem and byte size; also the key for scores, seeds and cache files.
 std::string hexId(const std::string &stem, long size) {
   unsigned long long h = 1469598103934665603ull;
   for (unsigned char c : stem) h = (h ^ c) * 1099511628211ull;
@@ -34,6 +43,7 @@ std::string hexId(const std::string &stem, long size) {
 }
 
 // Stereo 48 kHz to mono at the analysis rate, averaging the source samples each output sample covers.
+// decoded 48 kHz stereo int16 -> mono float at analysis::kSampleRate by box-averaging source samples.
 std::vector<float> toAnalysisRate(const audio::Track &t) {
   const double ratio = (double)audio::kRate / analysis::kSampleRate;
   const size_t n = (size_t)(t.frames() / ratio);
@@ -51,6 +61,7 @@ std::vector<float> toAnalysisRate(const audio::Track &t) {
 
 namespace {
 
+// adds one song (id, tidied title from ID3 tags or file name via tags::display); skips duplicates by id.
 void addFile(const std::string &path, const std::string &name, long size, std::vector<Entry> &list) {
   Entry en;
   en.path = path;
@@ -65,6 +76,7 @@ void addFile(const std::string &path, const std::string &name, long size, std::v
 
 // A title's sandbox may refuse to list a folder yet open known files: `index.txt` there holds one
 // "relative/path.mp3" per line, optionally followed by a tab and the size in bytes.
+// reads <dir>/index.txt (see header). size optional: measured with fopen/fseek when absent. false if no index file.
 bool readIndex(const std::string &dir, std::vector<Entry> &list) {
   FILE *f = std::fopen((dir + "/index.txt").c_str(), "r");
   if (!f) return false;
@@ -90,6 +102,7 @@ bool readIndex(const std::string &dir, std::vector<Entry> &list) {
   return true;
 }
 
+// recursive (depth<=4) listing of mp3s under dir. opendir failure at depth 0 => try readIndex(dir). logs the cause.
 void scanDir(const std::string &dir, int depth, std::vector<Entry> &list) {
   DIR *d = opendir(dir.c_str());
   if (!d) {
@@ -116,6 +129,7 @@ void scanDir(const std::string &dir, int depth, std::vector<Entry> &list) {
 
 }  // namespace
 
+// all dirs scanned in order, de-duplicated by id, sorted case-insensitively by title. logs songs found per dir. T: main thread.
 std::vector<Entry> scan(const std::vector<std::string> &dirs) {
   std::vector<Entry> list;
   for (const std::string &dir : dirs) {
@@ -131,12 +145,14 @@ std::vector<Entry> scan(const std::vector<std::string> &dirs) {
   return list;
 }
 
+// map cache file for (song, seed) at the current kMapperVersion.
 std::string cachePath(const Entry &e, const std::string &cacheDir, int seed) {
   char buf[48];
   std::snprintf(buf, sizeof buf, ".v%d.s%d.pulse", kMapperVersion, seed);
   return cacheDir + "/" + e.id + buf;
 }
 
+// bpm/duration/note counts from the cache if present (no decode); false if never analysed. for the select screen.
 bool cachedInfo(const Entry &e, const std::string &cacheDir, int seed, Info &out) {
   mapper::Song s;
   if (!mapper::read(cachePath(e, cacheDir, seed).c_str(), s) || s.maps.size() < 4) return false;
@@ -145,6 +161,9 @@ bool cachedInfo(const Entry &e, const std::string &cacheDir, int seed, Info &out
   return true;
 }
 
+// decode mp3 -> track (48 kHz stereo int16); song = cached map or analyse+generate+write cache. false if undecodable or no beat
+// found (<8 beats or <4 bars). blocking: UI shows a loading frame first. memory: caller must have freed the previous song
+// (console heap is finite; see main.cpp loadSongEntry).
 bool load(const Entry &e, const std::string &cacheDir, int seed, audio::Track &track, mapper::Song &song) {
   if (!audio::decodeMp3(e.path.c_str(), track)) {
     platform::log("library: cannot decode %s (failed)", e.path.c_str());

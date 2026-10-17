@@ -1,3 +1,9 @@
+// audio -> beat grid + song structure. pure fn of samples (deterministic, no I/O), ~1.6 s for 3.5 min on a laptop,
+// 2-7 s on console (PS5). needs the WHOLE song: not realtime. input mono float @ kSampleRate=22050 (library::toAnalysisRate).
+// pipeline: stft (1024 fft / 256 hop => kFps~86.1 frames/s) -> per-band flux (low<200 Hz, mid<2 kHz, high) -> weighted
+//   onset -> detrend -> peaks | tempo (autocorr, prior ~125 BPM, 60..200) -> DP beat track -> bpm=median beat gap ->
+//   downbeat phase (most low-band onset per i%4) -> bars (4 beats) -> normalised bar features -> sections.
+// !: results feed mapper.cpp and the visuals; changing thresholds changes maps => bump library::kMapperVersion.
 #include "analysis.h"
 
 #include <algorithm>
@@ -23,6 +29,7 @@ namespace {
 
 using cplx = std::complex<float>;
 
+// in-place radix-2 FFT. pre: a.size() power of two (kFft).
 void fft(std::vector<cplx> &a) {
   const size_t n = a.size();
   for (size_t i = 1, j = 0; i < n; i++) {
@@ -46,18 +53,21 @@ void fft(std::vector<cplx> &a) {
   }
 }
 
+// p in 0..1, nearest rank; copies v.
 float percentile(std::vector<float> v, float p) {
   if (v.empty()) return 0;
   std::sort(v.begin(), v.end());
   return v[std::min(v.size() - 1, (size_t)(p * (v.size() - 1) + 0.5f))];
 }
 
+// divide by the 95th percentile and clamp to 1 (robust to outliers).
 void normalise01(std::vector<float> &v) {
   if (v.empty()) return;
   const float hi = std::max(percentile(v, 0.95f), 1e-9f);
   for (float &x : v) x = std::min(x / hi, 1.0f);
 }
 
+// box filter +-radius samples (edges average what exists).
 std::vector<float> smooth(const std::vector<float> &v, int radius) {
   std::vector<float> o(v.size());
   for (int i = 0; i < (int)v.size(); i++) {

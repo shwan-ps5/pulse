@@ -1,3 +1,15 @@
+// GL renderer: notes/sabers/field (solid + line progs), text (baked atlas), menu panels, neon background (fullscreen shader or
+// real 3D rings), bloom post-process, head-locked hint. API in render.h; one entry point per frame: draw(vp, scene, bg).
+// CS: scene space (m, y up, -z away from player). vp = projection*view, supplied by caller per eye (VR) or once (flat view).
+// state: file-scope `gfx` (programs/VAOs/buffers), `post` (bloom targets), palette ids. T: GL thread only.
+// draw order inside draw() (!): background (no depth) -> rings (3D mode) -> field lines -> panel -> notes far-to-near -> shards ->
+//   sabers (additive glow shells, depth-write off, THEN core) -> HUD. anything opaque drawn after the saber glow overwrites it,
+//   because glow does not write depth: keep opaque UI BEFORE sabers (this was a real bug: menu hid saber glow).
+// !: the console GL does not clip at the eye plane: a big triangle with a vertex behind the camera vanishes. keep large flat things
+//   tiled (drawPanel uses 0.3 m tiles). no gl_ClipDistance/CPU clip here.
+// !: bloom (postBegin/postEnd, RGBA16F + 5-level dual filter) is only used by the flat TV view; the headset path draws straight
+//   to the eye framebuffer (cost). shader consts: threshold .85, shoulder tone-map .8.
+// ref: flow in game/main.cpp drawFlat/drawEyes; colours via kPalettes (accessibility palettes + hand swap).
 #include "render.h"
 
 #include <algorithm>
@@ -12,6 +24,8 @@ namespace render {
 
 namespace {
 
+// shaders: kVs/kFs solid lit mesh with distance fog; kLine* coloured lines; kText*/kArtFs textured quads (atlas alpha / RGB art);
+// kBg* fullscreen background from view direction (no geometry); kPost/kDown/kUp/kComp bloom chain + tone map.
 const char *kVs = R"(#version 460 core
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec3 nrm;
@@ -173,6 +187,7 @@ uniform sampler2D atlas;
 out vec4 o;
 void main() { o = vec4(texture(atlas, t).rgb * c, 1.0); })";
 
+// compile one shader; compile errors go to stderr only (no abort): a bad shader renders black, check the console log.
 unsigned compile(unsigned type, const char *src) {
   const unsigned s = glCreateShader(type);
   glShaderSource(s, 1, &src, nullptr);
@@ -186,6 +201,7 @@ unsigned compile(unsigned type, const char *src) {
   }
   return s;
 }
+// link vs+fs into a program. shaders are not deleted (process lifetime).
 unsigned program(const char *vs, const char *fs) {
   const unsigned p = glCreateProgram();
   glAttachShader(p, compile(GL_VERTEX_SHADER, vs));
@@ -194,6 +210,7 @@ unsigned program(const char *vs, const char *fs) {
   return p;
 }
 
+// all GL objects the renderer owns, created once by initGfx(); uniform locations cached for the solid/line/text programs.
 struct Gfx {
   unsigned solid, line, cubeVao, lineVao, lineVbo, triVao, cylVao, textProg, artProg, textVao, textVbo, atlas, artTex, bgProg, downProg, upProg, compProg, emptyVao;
   int vp, model, color, lit, fog, fogColor, lineVp, textVp;
@@ -201,6 +218,7 @@ struct Gfx {
 
 constexpr size_t kTextBytes = 1 << 20;
 
+// vertex layout shared by meshes: location 0 pos(vec3), 1 normal/colour(vec3), stride 24 bytes, one buffer.
 void attribs(unsigned vao, unsigned vbo) {
   glVertexArrayVertexBuffer(vao, 0, vbo, 0, 24);
   for (int a = 0; a < 2; a++) {
@@ -210,6 +228,8 @@ void attribs(unsigned vao, unsigned vbo) {
   }
 }
 
+// builds programs, unit cube/cylinder/triangle meshes, text and line buffers, the font atlas texture, empty VAO for
+// fullscreen triangles. false never today (errors are logged). call after a GL context exists.
 bool initGfx() {
   gfx.solid = program(kVs, kFs);
   gfx.line = program(kLineVs, kLineFs);
@@ -306,17 +326,20 @@ bool initGfx() {
   return true;
 }
 
+// non-uniform scale matrix.
 Mat4 scale(float x, float y, float z) {
   Mat4 s;
   s.m[0] = x, s.m[5] = y, s.m[10] = z;
   return s;
 }
+// rotation about +z by a radians (counter-clockwise seen from +z looking at -z).
 Mat4 rotZ(float a) {
   Mat4 r;
   r.m[0] = std::cos(a), r.m[1] = std::sin(a), r.m[4] = -std::sin(a), r.m[5] = std::cos(a);
   return r;
 }
 
+// draw a mesh: colour c, lit 0..1 = how much directional shading, fog 0..1 = mix toward fogColor (distance cue for notes).
 void solid(const Mat4 &vp, const Mat4 &model, unsigned vao, int verts, const float c[3], float lit, float fog, const float fogColor[3]) {
   glUseProgram(gfx.solid);
   glUniformMatrix4fv(gfx.vp, 1, GL_FALSE, vp.m);
@@ -330,12 +353,14 @@ void solid(const Mat4 &vp, const Mat4 &model, unsigned vao, int verts, const flo
 }
 
 // Cut direction to the arrow's angle (counter-clockwise from up).
+// dir code 0-7 -> radians for the arrow marker texture (0 up, ccw positive). other codes -> 0.
 float arrowAngle(int dir) {
   static const float deg[8] = {0, 180, 90, -90, 45, -45, 135, -135};
   return dir >= 0 && dir < 8 ? deg[dir] * 3.14159265f / 180 : 0;
 }
 
 
+// batch of coloured line segments (6 floats per vertex: pos, colour); flushed with one draw.
 struct Lines {
   std::vector<float> v;
   void add(float ax, float ay, float az, float bx, float by, float bz, const float c[3]) {
@@ -344,6 +369,8 @@ struct Lines {
   }
 };
 
+// one colour scheme. note/glow/core per HAND (index = hand(c) so 'swap hands' is a lookup). frame[]: white frame behind a block
+// (high-contrast black block); mono: greys only. add schemes by appending to kPalettes (UI cycles paletteCount()).
 struct Palette {
   const char *name;
   float note[2][3];   // block colour per hand
@@ -364,9 +391,12 @@ constexpr int kPaletteCount = sizeof kPalettes / sizeof kPalettes[0];
 int paletteId = 0;
 bool paletteSwap = false;
 
+// current palette.
 const Palette &pal() { return kPalettes[paletteId]; }
+// colour index c (0 left/red) -> palette slot, honouring the swap-hands option.
 int hand(int c) { return paletteSwap ? 1 - c : c; }
 const float *noteColour(int c) { return pal().note[hand(c)]; }
+// pick a dark marker on light blocks and a white one on dark blocks (luminance .3R+.59G+.11B > .55).
 bool darkMarker(const float *c) { return 0.3f * c[0] + 0.59f * c[1] + 0.11f * c[2] > 0.55f; }
 
 // One block with its cut marker on the face turned to the player, centred where `base` puts it.
@@ -385,6 +415,8 @@ void noteCube(const Mat4 &vp, const Mat4 &base, float size, int color, int dir, 
   }
 }
 
+// one note in flight: position from (lane,row,time-now)*speed, grows in over its first 0.25 s, fogs with distance, culled
+// beyond the horizon, past hitZ+0.12 s, and when z > s.maxZ (so nothing flies through the headset at the eye plane).
 void noteBox(const mapper::Note &n, const game::Config &cfg, const Scene &s, const Mat4 &vp, const float bg[3]) {
   const double dt = n.time - s.now;
   const double horizon = (80.0 - 0.8) / s.speed;
@@ -397,6 +429,7 @@ void noteBox(const mapper::Note &n, const game::Config &cfg, const Scene &s, con
 }
 
 // Text is textured quads from the baked atlas. `em` is the height of the font's em square in metres.
+// vertices (x y z u v r g b = 8 floats) of text quads, drawn by flushText in one call.
 struct TextBatch {
   std::vector<float> v;
 };
@@ -425,12 +458,14 @@ std::string plain(const std::string &s) {
   return out;
 }
 
+// width in metres of `str` at em-square height `em` (sum of baked advances). em = size*8 for Row sizes.
 float textWidth(const std::string &str, float em) {
   float w = 0;
   for (unsigned char c : plain(str)) w += fontatlas::kAdvance[glyphIndex(c)];
   return w * em / fontatlas::kEm;
 }
 
+// appends centred text at (cx,cy,z); baseline sits 0.36 em below cy. glyphs via plain()/glyphIndex (ASCII + Cyrillic).
 void addText(TextBatch &b, const std::string &str, float cx, float cy, float z, float em, const float colour[3]) {
   const float k = em / fontatlas::kEm;
   float x = cx - textWidth(str, em) / 2;
@@ -474,6 +509,7 @@ void drawArt(const Mat4 &vp, float cx, float cy, float z, float side, const floa
   glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+// uploads and draws the batch with alpha blending, depth test on, depth write off; clears the batch.
 void flushText(const Mat4 &vp, TextBatch &b) {
   if (b.v.empty()) return;
   const size_t bytes = std::min(b.v.size() * 4, kTextBytes);
@@ -498,6 +534,7 @@ namespace {
 // Rows wider than the headset's comfortable view shrink to fit.
 constexpr float kMaxTextWidth = 2.4f;
 
+// scale (<=1) that keeps a row within kMaxTextWidth (2.4 m): wide rows shrink instead of overflowing the headset's view.
 float fitScale(const Row &r) {
   const float w = textWidth(r.text, r.size * 8);
   return w > kMaxTextWidth ? kMaxTextWidth / w : 1.0f;
@@ -505,6 +542,8 @@ float fitScale(const Row &r) {
 
 }  // namespace
 
+// panel extent in metres from its rows: height .3 + sum(size*12), width max(1.2, widest row*fit + .4), +1 when a preview is shown.
+// also used by main.cpp to place the flat-view camera.
 void panelSize(const Panel &pn, float &width, float &height) {
   height = 0.3f, width = 1.2f;
   for (const Row &r : pn.rows) {
@@ -516,6 +555,8 @@ void panelSize(const Panel &pn, float &width, float &height) {
 
 namespace {
 
+// menu panel 1.6 m ahead of the origin at y=1.5: tiled backing plate, optional preview cubes, art rows, text rows. rows are
+// {text,size,style}: style 0 gold title, 1 pale, 2 white (selected), 3 grey, 4 green, 5 red.
 void drawPanel(const Mat4 &vp, const Panel &pn, const float bg[3]) {
   static const float colour[6][3] = {{1.0f, 0.8f, 0.2f}, {0.75f, 0.8f, 0.92f}, {1, 1, 1}, {0.5f, 0.54f, 0.68f}, {0.3f, 0.95f, 0.5f}, {1.0f, 0.4f, 0.4f}};
   const float z = -1.6f, cy = 1.5f, back[3] = {0.04f, 0.05f, 0.09f};
@@ -551,6 +592,7 @@ namespace {
 
 float lastBloom = 0.5f;
 
+// smoothstep(a,b,x) clamped.
 float smooth01(float a, float b, float x) {
   const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
   return t * t * (3 - 2 * t);
@@ -563,6 +605,9 @@ struct Mood {
   int sides = 5;
 };
 
+// background drivers at s.now: E energy arc (quiet start, builds to ~38% of the song, plateau, eases off after 84%) scaled by
+// bar intensity; bass/mid/high and beat pulse interpolated from the per-beat cues; hue by section; ring sides 3 + section%4.
+// no session (menus): a gentle idle cycle from s.clock.
 Mood moodAt(const Scene &s) {
   Mood m;
   if (!(s.session && s.song) || s.song->duration <= 0) {
@@ -599,6 +644,9 @@ Mood moodAt(const Scene &s) {
   return m;
 }
 
+// fullscreen background pass for the current view (reads the inverse of vp for ray directions). fractal weight rises with
+// energy and with level (0.6 + 0.15*diff); s.bg>1 = 48 iterations (flat view) else 22; geo=0 when real 3D rings are drawn.
+// also sets lastBloom (bloom strength for postEnd).
 void drawBackground(const Mat4 &vp, const Scene &s) {
   const Mood m = moodAt(s);
   float fractal = 0.45f;
@@ -663,6 +711,7 @@ struct Post {
   int w = 0, h = 0;
 } post;
 
+// RGBA16F colour target + framebuffer, linear filtered, clamped. returns the texture.
 unsigned makeTarget(int w, int h, unsigned &fbo) {
   unsigned tex;
   glCreateTextures(GL_TEXTURE_2D, 1, &tex);
@@ -676,6 +725,7 @@ unsigned makeTarget(int w, int h, unsigned &fbo) {
   return tex;
 }
 
+// deletes all bloom targets (on resize).
 void freePost() {
   if (!post.fbo) return;
   glDeleteFramebuffers(1, &post.fbo);
@@ -687,6 +737,7 @@ void freePost() {
 
 }  // namespace
 
+// binds the HDR scene target (recreated if the size changed) for drawing; pair with postEnd().
 bool postBegin(int w, int h) {
   if (post.w != w || post.h != h) {
     freePost();
@@ -702,6 +753,8 @@ bool postBegin(int w, int h) {
   return true;
 }
 
+// bloom: bright-pass+downsample chain (5 levels), upsample-add back up, then composite scene + bloom*lastBloom with a shoulder
+// tone map to the default framebuffer. no-op if postBegin was never called.
 void postEnd() {
   if (!post.fbo) return;
   glDisable(GL_DEPTH_TEST);
@@ -749,6 +802,8 @@ void postEnd() {
 
 bool init() { return initGfx(); }
 
+// head-locked message: a plate 1.1 m ahead of pose (p,q) (scene space, from the headset midpoint) and 0.34 m below the eye
+// line, two text lines, no depth test (always on top). used for 'PRESS R3 TO CENTRE THE MENU' before the first recentre.
 void hint(const Mat4 &vp, const float p[3], const float q[4], const char *line1, const char *line2) {
   const Mat4 m = translation(p[0], p[1], p[2]) * rotation(q) * translation(0, -0.34f, -1.1f);
   const float back[3] = {0.04f, 0.05f, 0.09f}, gold[3] = {1.0f, 0.8f, 0.2f}, white[3] = {0.9f, 0.92f, 1.0f}, none[3] = {0, 0, 0};
@@ -761,6 +816,7 @@ void hint(const Mat4 &vp, const float p[3], const float q[4], const char *line1,
   glEnable(GL_DEPTH_TEST);
 }
 
+// song cover as kArtSize^2 RGB; null clears (a dark placeholder is drawn). haveArt tracks which.
 void setArt(const uint8_t *rgb) {
   haveArt = rgb != nullptr;
   if (!rgb) return;
@@ -768,6 +824,7 @@ void setArt(const uint8_t *rgb) {
   glTextureSubImage2D(gfx.artTex, 0, 0, 0, 256, 256, GL_RGB, GL_UNSIGNED_BYTE, rgb);
 }
 
+// selects the colour scheme and hand swap used by every later draw.
 void setPalette(int id, bool swap) {
   paletteId = std::clamp(id, 0, kPaletteCount - 1);
   paletteSwap = swap;
@@ -775,6 +832,7 @@ void setPalette(int id, bool swap) {
 int paletteCount() { return kPaletteCount; }
 const char *paletteName(int id) { return kPalettes[std::clamp(id, 0, kPaletteCount - 1)].name; }
 
+// clear/fog colour: near-black, tinted by the current section and bar intensity (greys in the mono palette) so fog and clears match.
 void background(const Scene &s, float bg[3]) {
   const float tints[6][3] = {{0.10f, 0.14f, 0.28f}, {0.12f, 0.12f, 0.16f}, {0.35f, 0.25f, 0.04f}, {0.45f, 0.08f, 0.08f}, {0.05f, 0.30f, 0.22f}, {0.2f, 0.12f, 0.3f}};
   bg[0] = 0.03f, bg[1] = 0.03f, bg[2] = 0.05f;
@@ -787,6 +845,7 @@ void background(const Scene &s, float bg[3]) {
     }
 }
 
+// one view of the whole scene. caller clears and sets viewport/framebuffer. see file header for draw order and hazards.
 void draw(const Mat4 &vp, const Scene &s, const float bg[3]) {
   const game::Config cfg = s.session ? s.session->config() : game::Config();
   if (s.bg) drawBackground(vp, s);

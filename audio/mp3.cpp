@@ -1,3 +1,6 @@
+// mp3 -> 48 kHz stereo int16 (audio::kRate), via minimp3. resamples WHILE decoding (linear interpolation) so peak memory is
+// the final track only; the console heap is finite. output.pcm reserved from file size / first frame bitrate (+8%).
+// !: kMaxSamples (100M int16 ~ 17 min) refuses longer files (returns false) instead of risking heap exhaustion.
 #include "mp3.h"
 
 #include <cstdio>
@@ -14,6 +17,7 @@ namespace {
 constexpr size_t kMaxSamples = 100u * 1000 * 1000;
 }  // namespace
 
+// out.pcm = interleaved L,R int16 at audio::kRate. false if unreadable, not mp3, or over kMaxSamples. mono is duplicated to stereo.
 bool decodeMp3(const char *path, Track &out) {
   FILE *f = std::fopen(path, "rb");
   if (!f) return false;

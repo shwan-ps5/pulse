@@ -1,5 +1,9 @@
 #include "platform.h"
 
+// The desktop build of platform.h: SDL2 for the window, keyboard, mouse, game controller and audio, with a 4.6 core
+// OpenGL context like the console's, so the same renderer runs on both. The keyboard stands in for the pad, so the
+// game can be played and tested on a PC without a console or headset.
+
 #include <SDL.h>
 
 #include <algorithm>
@@ -16,6 +20,7 @@ static int w, h;
 static SDL_GameController *controller;
 static std::deque<int> keyQueue;
 
+// Opens the window (hidden for headless snapshots) and the OpenGL 4.6 core context. False if either fails.
 bool init(const char *title, int width, int height, bool hidden) {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
     log("SDL_Init: %s", SDL_GetError());
@@ -37,6 +42,7 @@ bool init(const char *title, int width, int height, bool hidden) {
   return true;
 }
 
+// Handles window events and queues key presses for nextKey(). False when the window is closed or Escape is pressed.
 bool poll() {
   SDL_Event e;
   while (SDL_PollEvent(&e)) {
@@ -51,6 +57,7 @@ bool poll() {
 
 void swap() { SDL_GL_SwapWindow(window); }
 
+// The oldest queued key press, or 0 when none.
 int nextKey() {
   if (keyQueue.empty()) return 0;
   const int k = keyQueue.front();
@@ -58,6 +65,7 @@ int nextKey() {
   return k;
 }
 
+// The mouse position scaled to -1..1 over the window (up and right positive) and its two buttons.
 bool mouse(float &x, float &y, int &buttons) {
   int mx, my;
   const Uint32 b = SDL_GetMouseState(&mx, &my);
@@ -70,12 +78,15 @@ bool mouse(float &x, float &y, int &buttons) {
 
 void setTitle(const char *title) { SDL_SetWindowTitle(window, title); }
 
+// Destroys the context and window.
 void shutdown() {
   if (context) SDL_GL_DeleteContext(context);
   if (window) SDL_DestroyWindow(window);
   SDL_Quit();
 }
 
+// The keyboard as pad buttons: Space is Cross, C Circle, S Square, T Triangle, R is R3, arrows are the D-pad,
+// [ and ] the shoulders, P Options, Backspace Create.
 uint32_t buttons() {
   const Uint8 *k = SDL_GetKeyboardState(nullptr);
   const struct { SDL_Scancode key; uint32_t bit; } map[] = {
@@ -123,6 +134,7 @@ Pad pad() {
 
 int user() { return 0; }
 
+// The login name of the user running the game.
 const char *playerName() {
   const char *n = std::getenv("USER");
   return n && *n ? n : "PLAYER";
@@ -130,6 +142,7 @@ const char *playerName() {
 
 static void (*audioFill)(float *, int);
 
+// Opens the default audio device for stereo floats and calls `fill` from SDL's audio thread, like the console.
 bool startAudio(void (*fill)(float *out, int frames), int rate) {
   if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return false;
   audioFill = fill;
@@ -154,6 +167,7 @@ int height() { return h; }
 double seconds() { return SDL_GetPerformanceCounter() / (double)SDL_GetPerformanceFrequency(); }
 void sleepMs(int ms) { SDL_Delay((Uint32)std::max(0, ms)); }
 
+// Messages go to stderr on the desktop (the console build also sends them over the network and shows some as pop-ups).
 void log(const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);

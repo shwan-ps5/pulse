@@ -29,12 +29,14 @@ namespace {
 
 constexpr int kRate = 48000;
 
+// POSIX single-quote escaping for a path passed to ffmpeg via popen.
 std::string shellQuote(const std::string &s) {
   std::string o = "'";
   for (char c : s) o += c == '\'' ? std::string("'\\''") : std::string(1, c);
   return o + "'";
 }
 
+// decodes any audio file to float PCM through an ffmpeg pipe (desktop dev tool: not the console's decoder).
 bool decode(const std::string &path, int channels, int rate, std::vector<float> &out) {
   const std::string cmd = "ffmpeg -v error -i " + shellQuote(path) + " -vn -ac " + std::to_string(channels) + " -ar " + std::to_string(rate) + " -f f32le -";
   FILE *p = popen(cmd.c_str(), "r");
@@ -58,6 +60,7 @@ struct Voice {
 };
 std::vector<Voice> voices;
 
+// audio callback: plays the decoded song at playPos plus hit clicks (same idea as game/main.cpp fill).
 void fill(float *out, int frames) {
   std::unique_lock<std::mutex> lock(mapLock, std::try_to_lock);
   std::memset(out, 0, sizeof(float) * 2 * frames);
@@ -92,6 +95,7 @@ void fill(float *out, int frames) {
   playPos = pos + frames;
 }
 
+// forget clicks scheduled after time t (after a seek).
 void resetClicks(double t) {
   std::lock_guard<std::mutex> lock(mapLock);
   voices.clear();
@@ -114,6 +118,7 @@ game::SaberPose sabers[2] = {{{-0.25f, 1.0f, -0.35f}, {-0.25f, 1.0f, -1.35f}}, {
 
 std::vector<render::Fx> effects;
 
+// new game::Session for the current map/seed, restarted at `now`.
 void newSession(double now) {
   session = std::make_unique<game::Session>(song.maps[diff].notes);
   session->restart(now);
@@ -121,6 +126,7 @@ void newSession(double now) {
   effects.clear();
 }
 
+// re-run mapper::generate with the current seed (N/B keys) and restart.
 void regenerate() {
   std::lock_guard<std::mutex> lock(mapLock);
   song = mapper::generate(result, seed);
@@ -130,6 +136,7 @@ void regenerate() {
   voices.clear();
 }
 
+// one frame of the viewer (flat camera, no bloom).
 void drawFrame(double now, int w, int h) {
   render::Scene sc;
   sc.now = now, sc.song = &song, sc.diff = diff, sc.session = session.get(), sc.sabers = sabers, sc.effects = &effects, sc.speed = speed;
@@ -147,6 +154,7 @@ void drawFrame(double now, int w, int h) {
 
 }  // namespace
 
+// dev tool entry: analyse -> generate -> play with a bot or mouse sabers to judge patterns. not part of the shipped game.
 int main(int argc, char **argv) {
   std::string in, shotPath;
   double shotAt = 0;

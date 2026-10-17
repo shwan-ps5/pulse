@@ -12,6 +12,7 @@
 
 namespace {
 
+// ffmpeg pipe -> mono float at analysis::kSampleRate (desktop only).
 bool decode(const std::string &path, std::vector<float> &out) {
   std::string cmd = "ffmpeg -v error -i '";
   for (char c : path) cmd += c == '\'' ? std::string("'\\''") : std::string(1, c);
@@ -26,6 +27,7 @@ bool decode(const std::string &path, std::vector<float> &out) {
 
 const char *kSectionColour[] = {"#3a4a6a", "#2a2f3a", "#b8860b", "#c0392b", "#1e6b52", "#4a3a6a"};
 
+// debug plot of onset curve, beats, sections and notes per level (open in a browser).
 void svg(const char *path, const analysis::Result &r, const mapper::Song &s) {
   FILE *f = std::fopen(path, "w");
   if (!f) return;
@@ -63,6 +65,8 @@ void svg(const char *path, const analysis::Result &r, const mapper::Song &s) {
 
 }  // namespace
 
+// pulse-map song.mp3 [-o dir] [--seed N]: analyse + generate, print sections and per-level counts + validate() problems, write
+// .pulse files and the svg. CI-style check that the mapper still produces valid maps.
 int main(int argc, char **argv) {
   std::string in, out = ".";
   unsigned seed = 1;
