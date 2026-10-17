@@ -21,8 +21,8 @@ build/pulse-view: tools/pulse-view/main.cpp analysis/*.cpp analysis/*.h core/*.c
 view: build/pulse-view
 	./build/pulse-view "$(SONG)"
 
-build/game-test: tests/game_test.cpp core/*.cpp core/*.h analysis/mapper.cpp analysis/analysis.cpp | build
-	$(CXX) $(CXXFLAGS) -std=c++17 -Wall -Wextra -Icore -Ianalysis -o $@ tests/game_test.cpp core/game.cpp analysis/mapper.cpp analysis/analysis.cpp
+build/game-test: tests/game_test.cpp core/*.cpp core/*.h game/scores.* analysis/mapper.cpp analysis/analysis.cpp | build
+	$(CXX) $(CXXFLAGS) -std=c++17 -Wall -Wextra -Icore -Ianalysis -Igame -o $@ tests/game_test.cpp core/game.cpp game/scores.cpp analysis/mapper.cpp analysis/analysis.cpp
 
 test: build/game-test
 	./build/game-test

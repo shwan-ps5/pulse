@@ -13,7 +13,8 @@ std::string key(const std::string &id, int d) { return id + ":" + std::to_string
 
 void save() {
   if (FILE *f = std::fopen(file.c_str(), "w")) {
-    for (const auto &kv : table) std::fprintf(f, "%s %ld %.2f %d %d\n", kv.first.c_str(), kv.second.score, (double)kv.second.accuracy, kv.second.combo, kv.second.plays);
+    for (const auto &kv : table)
+      std::fprintf(f, "%s %ld %.2f %d %d %.2f\n", kv.first.c_str(), kv.second.score, (double)kv.second.accuracy, kv.second.combo, kv.second.plays, (double)kv.second.rating);
     std::fclose(f);
   }
 }
@@ -24,10 +25,16 @@ void init(const std::string &path) {
   table.clear();
   FILE *f = std::fopen(path.c_str(), "r");
   if (!f) return;
-  char k[64];
-  Best b;
-  double acc;
-  while (std::fscanf(f, "%63s %ld %lf %d %d", k, &b.score, &acc, &b.combo, &b.plays) == 5) b.accuracy = (float)acc, table[k] = b;
+  char line[256], k[64];
+  while (std::fgets(line, sizeof line, f)) {
+    Best b;
+    double acc, rate;
+    const int n = std::sscanf(line, "%63s %ld %lf %d %d %lf", k, &b.score, &acc, &b.combo, &b.plays, &rate);
+    if (n < 5) continue;
+    b.accuracy = (float)acc;
+    b.rating = n == 6 ? (float)rate : b.accuracy;
+    table[k] = b;
+  }
   std::fclose(f);
 }
 
@@ -36,17 +43,23 @@ Best get(const std::string &id, int d) {
   return it == table.end() ? Best() : it->second;
 }
 
-bool record(const std::string &id, int d, long score, float accuracy, int combo) {
+bool record(const std::string &id, int d, long score, float accuracy, float rating, int combo) {
   Best &b = table[key(id, d)];
   const bool best = score > b.score;
   if (best) b.score = score;
   b.accuracy = std::max(b.accuracy, accuracy);
+  b.rating = std::max(b.rating, rating);
   b.combo = std::max(b.combo, combo);
   b.plays++;
   save();
   return best;
 }
 
-const char *rank(float a) { return a >= 90 ? "S" : a >= 80 ? "A" : a >= 65 ? "B" : a >= 50 ? "C" : "D"; }
+float rating(float accuracy, int hits, int notes) {
+  const float hitShare = notes > 0 ? (float)hits / notes : 0.0f;
+  return 50.0f * hitShare + 50.0f * std::min(1.0f, accuracy / 60.0f);
+}
+
+const char *rank(float r) { return r >= 90 ? "S" : r >= 80 ? "A" : r >= 70 ? "B" : r >= 50 ? "C" : r >= 40 ? "D" : r >= 30 ? "E" : "F"; }
 
 }  // namespace scores

@@ -8,6 +8,8 @@ Title ID `PPSA99993`. Needs a jailbroken PS5 running ShadowMountPlus (or another
 
 ## Install
 
+No release has been published yet: it is still in testing. Until then, build the zip yourself with `bash ps5/release.sh` (see Building).
+
 1. Copy the `PPSA99993` folder from the release zip to your mounted app location (for example `/mnt/usb0/PPSA99993`).
 2. Start the jailbreak and mount it as usual, then launch Pulse from the home screen.
 
@@ -34,7 +36,7 @@ R3 to centre it (a hint shows until you do). **How to play** in the title menu e
 - **Hard**: arrows. Cut the way the arrow points; the wrong way scores nothing and breaks the combo.
 - **Extreme**: Hard with more blocks, pairs and faster runs.
 
-A cut scores up to 115 times the multiplier (x2 at 2 in a row, x4 at 6, x8 at 14); a miss or a bad cut resets it.
+A cut scores up to 115 times the multiplier (x2 at 2 in a row, x4 at 6, x8 at 14); a miss or a bad cut resets it. The rank is out of 100, half the share of blocks hit and half the score, so a few misses do not sink it: S 90 and up, A 80, B 70, C 50, D 40, E 30, and F below that.
 Triangle on the song list picks a new pattern for a song. Options has colour-blind and high-contrast palettes, a
 hand swap, and the background: off, flat or 3D.
 

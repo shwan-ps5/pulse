@@ -2,9 +2,11 @@
 // swings don't, misses cost the combo, and a full generated map plays through.
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 #include "bot.h"
 #include "game.h"
+#include "scores.h"
 
 using namespace game;
 
@@ -165,6 +167,19 @@ int main() {
     CHECK(held({{5.0, 1, 1, 0, 1}}, touch, 0).hits == 0, "held saber on an arrow should still miss");
     const Stats wrong = held({{5.0, 1, 1, 0, 8}}, touch, 1);
     CHECK(wrong.hits == 0 && wrong.badCuts == 0, "wrong colour held still: %d hits %d bad", wrong.hits, wrong.badCuts);
+  }
+  // 10. Ranks: S 90, A 80, B 70, C 50, D 40, E 30, F below.
+  {
+    auto grade = [](float acc, int hits, int notes) { return std::string(scores::rank(scores::rating(acc, hits, notes))); };
+    CHECK(grade(14.2f, 171, 197) == "C", "87%% of blocks hit with short combos should be a C, got %s", grade(14.2f, 171, 197).c_str());
+    CHECK(grade(35, 190, 200) == "B", "95%% hit, 35%% of max should be a B, got %s", grade(35, 190, 200).c_str());
+    CHECK(grade(55, 200, 200) == "S" || grade(55, 200, 200) == "A", "everything hit should be S or A, got %s", grade(55, 200, 200).c_str());
+    CHECK(grade(100, 200, 200) == "S", "a perfect run is S");
+    CHECK(grade(8, 140, 200) == "D", "70%% hit, tiny score should be a D, got %s", grade(8, 140, 200).c_str());
+    CHECK(grade(0, 0, 200) == "F", "nothing hit is an F");
+  const struct { float r; const char *rank; } edges[] = {{100, "S"}, {90, "S"}, {89.9f, "A"}, {80, "A"}, {79.9f, "B"}, {70, "B"}, {69.9f, "C"}, {50, "C"}, {49.9f, "D"},
+                                                         {40, "D"}, {39.9f, "E"}, {30, "E"}, {29.9f, "F"}, {0, "F"}};
+  for (const auto &e : edges) CHECK(std::string(scores::rank(e.r)) == e.rank, "rating %.1f should be %s, got %s", (double)e.r, e.rank, scores::rank(e.r));
   }
   std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures ? 1 : 0;

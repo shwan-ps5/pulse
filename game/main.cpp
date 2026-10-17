@@ -130,7 +130,7 @@ bool haveInfo = false;
 std::string infoKey, artFor;
 struct Result {
   long score = 0;
-  float accuracy = 0;
+  float accuracy = 0, rating = 0;
   int combo = 0, hits = 0, misses = 0;
   bool best = false;
 } result;
@@ -327,6 +327,7 @@ void buildHelp() {
     line("FAST, WIDE SWINGS AND CUTTING THE MIDDLE SCORE MORE");
     line("MULTIPLIER: X2 AT 2 IN A ROW, X4 AT 6, X8 AT 14");
     line("A MISS OR A BAD CUT RESETS IT");
+    line("RANK, S TO F: HALF FROM BLOCKS HIT, HALF FROM SCORE");
     panel.add(" ", 0.008f);
     head("CONTROLS");
     line("R3 CENTRES THE MENU     OPTIONS BUTTON PAUSES");
@@ -394,7 +395,7 @@ void buildSelect() {
   std::snprintf(line, sizeof line, "PATTERN %d", sd);
   panel.add(line, 0.011f, 3);
   const scores::Best b = scores::get(scoreKey(cur.id), diff);
-  if (b.plays) std::snprintf(line, sizeof line, "BEST %ld   %s   %.1f%%   COMBO %d", b.score, scores::rank(b.accuracy), (double)b.accuracy, b.combo);
+  if (b.plays) std::snprintf(line, sizeof line, "BEST %ld   %s   %.1f%%   COMBO %d", b.score, scores::rank(b.rating), (double)b.accuracy, b.combo);
   else std::snprintf(line, sizeof line, "NO SCORE YET");
   panel.add(line, 0.014f, 1);
   if (!statusLine.empty()) panel.add(statusLine, 0.012f, 5);
@@ -415,7 +416,7 @@ void buildResults() {
   panel.add("SONG COMPLETE", 0.03f, 0);
   panel.add(clip(songTitle, 38) + "   " + kDiffNames[diff], 0.012f, 3);
   panel.add(" ", 0.012f);
-  panel.add(scores::rank(result.accuracy), 0.07f, result.accuracy >= 80 ? 4 : result.accuracy >= 50 ? 0 : 5);
+  panel.add(scores::rank(result.rating), 0.07f, result.rating >= 70 ? 4 : result.rating >= 50 ? 0 : 5);
   char line[96];
   std::snprintf(line, sizeof line, "SCORE %ld", result.score);
   panel.add(line, 0.022f, 2);
@@ -492,11 +493,12 @@ void finishRun() {
   const game::Stats &st = session->stats();
   result.score = st.score, result.combo = st.maxCombo, result.hits = st.hits, result.misses = st.misses + st.badCuts;
   result.accuracy = session->maxScore() ? (float)(100.0 * st.score / session->maxScore()) : 0.0f;
-  result.best = scores::record(songId, diff, result.score, result.accuracy, result.combo);
+  result.rating = scores::rating(result.accuracy, st.hits, (int)session->notes().size());
+  result.best = scores::record(songId, diff, result.score, result.accuracy, result.rating, result.combo);
   playing = false;
   resultSel = 0;
   screen = Screen::Results;
-  platform::log("game: finished %s %s: %ld, %.1f%%, rank %s%s", songTitle.c_str(), kDiffNames[diff], result.score, (double)result.accuracy, scores::rank(result.accuracy),
+  platform::log("game: finished %s %s: %ld, %.1f%%, rank %s%s", songTitle.c_str(), kDiffNames[diff], result.score, (double)result.accuracy, scores::rank(result.rating),
                 result.best ? " (new best)" : "");
 }
 
