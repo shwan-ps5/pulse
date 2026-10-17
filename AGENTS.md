@@ -48,7 +48,7 @@ Cut dir codes: 0 up 1 down 2 left 3 right 4 UL 5 UR 6 DL 7 DR 8 dot 9 vert 10 ho
 Easy dots: any dir; right-colour touch counts at any speed (touchCuts). Medium lines: along axis full, across x0.5, no combo break
 for direction. Hard/Extreme arrows: direction required (cardinal within 45 deg, diagonal within 22.5 deg) else BadCut (0 pts, combo 0).
 Wrong colour or too-slow swing (non-dot) = BadCut/miss on every level. Score/cut <= 115 x multiplier (1,2,4,8 at combo 0,2,6,14).
-Rank: rating = 50*hitShare + 50*min(1, accuracy%/60); S>=90 A80 B70 C50 D40 E30 F. (scores.cpp, game_test #10).
+Blade length by level: 1.3/1.2/1.1/1.0 m (main.cpp bladeLength(); hit tests use the pose's base->tip, so reach follows). Rank: rating = 50*hitShare + 50*min(1, accuracy%/60); S>=90 A80 B70 C50 D40 E30 F. (scores.cpp, game_test #10).
 
 ## persistent files
 `<STORAGE>` = `/download0/` console, `build/` desktop. settings.txt "paletteId swap bgMode"; seeds.txt "id seed"; scores.txt
@@ -56,8 +56,10 @@ Rank: rating = 50*hitShare + 50*min(1, accuracy%/60); S>=90 A80 B70 C50 D40 E30 
 .pulse format: see mapper.cpp write()/read(). index.txt: "relative/path.mp3[<TAB>bytes]" per line.
 
 ## console hazards (all observed on hardware; do not relearn them; the full platform notes are in docs/PS5-VR2-NOTES.md)
-- Title sandbox: opendir() returns EPERM for /mnt, /mnt/usb0, /data, /download0 (fopen of files works). Listing /app0 is unverified
-  (the game logs "cannot list ... errno N" per dir). index.txt is the fallback. Do not rely on directory listing outside /app0.
+- Title sandbox: libc opendir() returns EPERM (errno 1) for /mnt, /mnt/usb0, /data, /download0 and /app0/assets/songs, but raw
+  open(path, O_RDONLY|O_DIRECTORY) + getdents() WORKS on /app0/assets/songs (verified: "listed through open(dir)"). library.cpp listDir()
+  tries opendir first, then the raw routes, and logs each errno for a root folder that cannot be listed. index.txt is only the fallback
+  (readIndex). Other roots (/download0, /mnt/usb0) were not retried with the raw call: try it before assuming they are closed.
 - Heap: runtime default 128 MiB; main.cpp defines `ps5_opengl_heap_size`=1 GiB (falls back by halving). Free the previous song before
   decoding the next (loadSongEntry). Tracks > ~17 min are refused (mp3.cpp kMaxSamples). Measured: heap in use 60-143 MiB per song.
 - In VR the title must NOT present flat frames (drawFlat/platform::swap): the flat bloom path crashed the console. Loading screens

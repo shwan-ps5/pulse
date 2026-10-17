@@ -19,13 +19,15 @@ sandbox in it. Development builds (`ps5/build.sh`) can also send their log to a 
 
 ## Adding your own music
 
-Copy MP3s (in any folders) into `PPSA99993/assets/songs/`, then choose **Options, Rescan Music** in the game: new
-songs appear in the list without restarting. Songs are read by their ID3 tags (artist, title, cover picture) and
-fall back to the file name. Tracks over about 17 minutes are skipped. Maps are cached in `/download0/cache` the
-first time a song is played.
+Copy MP3s (in any folders) into `PPSA99993/assets/songs/`, then choose **Options, Rescan Music** in the game: new songs appear without
+restarting. No list file is needed: the game opens the folder directly (the console refuses the usual way of listing a folder, so the
+game uses a lower-level call that works; the log says `listed through open(dir)`). Songs are read by their ID3 tags (artist, title, cover
+picture) and fall back to the file name. Tracks over about 17 minutes are skipped. Maps are cached in `/download0/cache` the first
+time a song is played.
 
-If the console will not let the title list a folder, Rescan finds nothing. In that case list the files in
-`assets/songs/index.txt`, one relative path per line: `python3 tools/make-index.py <path to assets/songs>` writes it.
+Fallback: if a console or firmware ever refuses listing too, the game reads `assets/songs/index.txt` (one path per line, relative to that
+folder; backslashes, `./` and full Windows paths are accepted). Make it with `find . -name '*.mp3' > index.txt` (Linux, macOS), `dir /s /b /a-d *.mp3
+> index.txt` (Windows cmd) or `python3 tools/make-index.py <path to assets/songs>`.
 
 ## Playing
 
@@ -39,7 +41,7 @@ R3 to centre it (a hint shows until you do). **How to play** in the title menu e
 - **Extreme**: Hard with more blocks, pairs and faster runs.
 
 A cut scores up to 115 times the multiplier (x2 at 2 in a row, x4 at 6, x8 at 14); a miss or a bad cut resets it. The rank is out of 100, half the share of blocks hit and half the score, so a few misses do not sink it: S 90 and up, A 80, B 70, C 50, D 40, E 30, and F below that.
-Triangle on the song list picks a new pattern for a song. Options has colour-blind and high-contrast palettes, a
+The saber is longer on the easier levels for more reach (1.3 m Easy, 1.2 Medium, 1.1 Hard, 1.0 Extreme). Triangle on the song list picks a new pattern for a song. Options has colour-blind and high-contrast palettes, a
 hand swap, and the background: off, flat or 3D.
 
 ## Building

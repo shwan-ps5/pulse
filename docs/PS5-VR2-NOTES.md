@@ -14,8 +14,9 @@ starting another game does not have to rediscover it. Tags: **[V]** verified on 
 - The PS button belongs to the system. `platform::poll()` quits on Create + Options held for 1 s. [V]
 
 ## Sandbox and storage
-- `opendir()` fails with `EPERM` on `/mnt`, `/mnt/usb0`, `/data` and `/download0`. `fopen()` of files in the app folder (`/app0`) and writes to
-  `/download0` work. Listing `/app0/assets/...` is not verified [U]; the game falls back to an `index.txt` file list. [V for the failures]
+- libc `opendir()` fails with `EPERM` on `/mnt`, `/mnt/usb0`, `/data`, `/download0` and `/app0/assets/songs`. **But raw `open(path, O_RDONLY | O_DIRECTORY)` followed
+  by `getdents()` lists `/app0/assets/songs`** (192 entries, 304 songs below it). `fopen()` of files in the app folder and writes to
+  `/download0` work. The other roots have not been retried with the raw call [?]; the game keeps an `index.txt` list as a last resort. [V]
 - `/download0` is the title's persistent writable folder (settings, scores, cache). From FTP it appears at
   `/mnt/sandbox/<TITLEID>_000/download0/` only while the title runs. [V]
 - The console keeps its own copies of `sce_sys` (icon, backgrounds, `param.json`) made when the title is first registered, in

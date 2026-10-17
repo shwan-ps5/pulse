@@ -186,7 +186,7 @@ void loadSettings() {
     int p = 0, sw = 0, bg = bgMode;
     const int got = std::fscanf(f, "%d %d %d", &p, &sw, &bg);
     if (got >= 2 && p >= 0 && p < render::paletteCount()) paletteId = p, paletteSwap = sw != 0;
-    if (got == 3 && bg >= 0 && bg < 3) bgMode = bg;
+    if (got >= 3 && bg >= 0 && bg < 3) bgMode = bg;
     std::fclose(f);
   }
   if (FILE *f = std::fopen(STORAGE "seeds.txt", "r")) {
@@ -319,14 +319,21 @@ void quatToScene(const float q[4], float out[4]) {
 }
 
 // The saber a controller makes: the hilt at the controller, the blade along its chosen axis.
-// hilt at the controller, tip = hilt + 1 m along the chosen axis rotated by the controller orientation. scene space.
+// hilt at the controller, tip = hilt + bladeLength() m along the chosen axis rotated by the controller orientation. scene space.
+// blade length by level: the easier the level the longer the blade (more reach), 1.3 / 1.2 / 1.1 / 1.0 m for Easy..Extreme.
+float bladeLength() {
+  static const float len[4] = {1.3f, 1.2f, 1.1f, 1.0f};
+  return len[diff];
+}
+
 game::SaberPose saberFrom(const vr::Hand &h) {
   float pos[3], q[4];
   toScene(h.pos, pos);
   quatToScene(h.quat, q);
   float d[3];
   rotate(q, kAxes[bladeAxis], d);
-  return {{pos[0], pos[1], pos[2]}, {pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]}};
+  const float len = bladeLength();
+  return {{pos[0], pos[1], pos[2]}, {pos[0] + d[0] * len, pos[1] + d[1] * len, pos[2] + d[2] * len}};
 }
 
 
@@ -374,6 +381,7 @@ void buildHelp() {
     panel.add(" ", 0.008f);
     head("CONTROLS");
     line("R3 CENTRES THE MENU     OPTIONS BUTTON PAUSES");
+    line("SABER LENGTH: EASY 1.3 M, MEDIUM 1.2, HARD 1.1, EXTREME 1.0");
     line("TRIANGLE ON SONG SELECT PICKS A NEW PATTERN");
     line("OPTIONS: COLOUR-BLIND PALETTES, BACKGROUND, RESCAN");
   }

@@ -8,6 +8,8 @@
 #include "library.h"
 
 #include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 #include <algorithm>
@@ -20,6 +22,8 @@
 #include "analysis.h"
 #include "platform.h"
 #include "tags.h"
+
+#define PULSE_TITLE "PPSA99993"
 
 namespace library {
 
@@ -75,7 +79,7 @@ void addFile(const std::string &path, const std::string &name, long size, std::v
 }
 
 // A title's sandbox may refuse to list a folder yet open known files: `index.txt` there holds one
-// "relative/path.mp3" per line, optionally followed by a tab and the size in bytes.
+// "relative/path.mp3" per line, optionally followed by a tab and the size in bytes. Tolerant of hand-made lists (see below).
 // reads <dir>/index.txt (see header). size optional: measured with fopen/fseek when absent. false if no index file.
 bool readIndex(const std::string &dir, std::vector<Entry> &list) {
   FILE *f = std::fopen((dir + "/index.txt").c_str(), "r");
@@ -83,48 +87,126 @@ bool readIndex(const std::string &dir, std::vector<Entry> &list) {
   char line[1024];
   while (std::fgets(line, sizeof line, f)) {
     std::string l = line;
-    while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+    while (!l.empty() && (l.back() == '\n' || l.back() == '\r' || l.back() == ' ')) l.pop_back();
+    if (l.size() >= 3 && (unsigned char)l[0] == 0xEF && (unsigned char)l[1] == 0xBB && (unsigned char)l[2] == 0xBF) l.erase(0, 3);
     const size_t tab = l.rfind('\t');
-    const std::string rel = tab == std::string::npos ? l : l.substr(0, tab);
+    std::string rel = tab == std::string::npos ? l : l.substr(0, tab);
+    // lists made by hand or by Windows tools: backslashes, "./", and full paths such as "E:\\PPSA99993\\assets\\songs\\Artist\\a.mp3"
+    for (char &c : rel)
+      if (c == '\\') c = '/';
+    if (rel.compare(0, 2, "./") == 0) rel.erase(0, 2);
+    long size = tab == std::string::npos ? 0 : std::atol(l.c_str() + tab + 1);
+    FILE *probe = std::fopen((dir + "/" + rel).c_str(), "rb");
+    if (!probe) {
+      std::string low = rel;
+      for (char &c : low) c = (char)std::tolower((unsigned char)c);
+      const size_t at = low.find("/songs/");
+      if (at != std::string::npos) rel.erase(0, at + 7);
+      else if (low.compare(0, 6, "songs/") == 0) rel.erase(0, 6);
+      probe = std::fopen((dir + "/" + rel).c_str(), "rb");
+    }
     const size_t slash = rel.rfind('/');
     const std::string name = slash == std::string::npos ? rel : rel.substr(slash + 1);
-    long size = tab == std::string::npos ? 0 : std::atol(l.c_str() + tab + 1);
+    if (!probe) continue;
     if (size <= 0) {
-      FILE *m = std::fopen((dir + "/" + rel).c_str(), "rb");
-      if (!m) continue;
-      std::fseek(m, 0, SEEK_END);
-      size = std::ftell(m);
-      std::fclose(m);
+      std::fseek(probe, 0, SEEK_END);
+      size = std::ftell(probe);
     }
+    std::fclose(probe);
     if (endsWithMp3(name)) addFile(dir + "/" + rel, name, size, list);
   }
   std::fclose(f);
   return true;
 }
 
-// recursive (depth<=4) listing of mp3s under dir. opendir failure at depth 0 => try readIndex(dir). logs the cause.
+struct DirItem {
+  std::string name;
+  bool dir;
+};
+
+// lists one folder. normal path: opendir/readdir. console: the title sandbox refuses opendir on every path tried so far, so on
+// failure (probe=true: once per root folder) other routes are tried and every outcome is logged as errno numbers:
+// raw open(O_DIRECTORY) + getdents, plain open + getdents, and the same on the sandbox's real mount path for /app0 and /download0.
+// returns false if nothing could list it. d_type tells folders from files; DT_UNKNOWN falls back to stat.
+bool listDir(const std::string &dir, std::vector<DirItem> &out, bool probe) {
+  out.clear();
+  auto kind = [&](const std::string &name, unsigned char type) {
+    if (type == DT_DIR) return true;
+    if (type != DT_UNKNOWN) return false;
+    struct stat st;
+    return stat((dir + "/" + name).c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+  };
+  if (DIR *d = opendir(dir.c_str())) {
+    while (dirent *e = readdir(d))
+      if (e->d_name[0] != '.') out.push_back({e->d_name, kind(e->d_name, e->d_type)});
+    closedir(d);
+    return true;
+  }
+  const int first = errno;
+#ifdef PLATFORM_PS5
+  std::string alt = dir;
+  for (const char *root : {"/app0", "/download0"})
+    if (dir.compare(0, std::strlen(root), root) == 0) alt = std::string("/mnt/sandbox/" PULSE_TITLE "_000") + dir;
+  struct Try {
+    const char *label;
+    const std::string &path;
+    int flags;
+  };
+  const Try tries[] = {{"open(dir)", dir, O_RDONLY | O_DIRECTORY}, {"open", dir, O_RDONLY}, {"alt(dir)", alt, O_RDONLY | O_DIRECTORY}, {"alt", alt, O_RDONLY}};
+  std::string report = "opendir " + std::to_string(first);
+  for (const Try &t : tries) {
+    if (t.path == dir && t.label[0] == 'a') continue;
+    const int fd = open(t.path.c_str(), t.flags);
+    if (fd < 0) {
+      report += std::string(", ") + t.label + " " + std::to_string(errno);
+      continue;
+    }
+    char buf[8192];
+    long total = 0;
+    for (int n; (n = getdents(fd, buf, sizeof buf)) > 0;) {
+      for (int off = 0; off < n;) {
+        const dirent *e = (const dirent *)(buf + off);
+        if (e->d_name[0] != '.' && e->d_reclen > 0) out.push_back({e->d_name, kind(e->d_name, e->d_type)}), total++;
+        off += e->d_reclen > 0 ? e->d_reclen : n;
+      }
+    }
+    close(fd);
+    if (probe) platform::log("library: %s: listed through %s (%ld entries)", dir.c_str(), t.label, total);
+    return true;
+  }
+  if (probe) platform::log("library: %s: cannot list (%s)", dir.c_str(), report.c_str());
+#else
+  (void)probe;
+#endif
+  errno = first;
+  return false;
+}
+
+// recursive (depth<=4) listing of mp3s under dir. a folder that cannot be listed at depth 0 falls back to readIndex(dir).
 void scanDir(const std::string &dir, int depth, std::vector<Entry> &list) {
-  DIR *d = opendir(dir.c_str());
-  if (!d) {
-    const int err = errno;
-    if (depth == 0 && readIndex(dir, list)) platform::log("library: %s: cannot list (errno %d), read index.txt", dir.c_str(), err);
-    else if (depth == 0 && err != ENOENT) platform::log("library: %s: cannot list (errno %d)", dir.c_str(), err);
+  std::vector<DirItem> items;
+  if (!listDir(dir, items, depth == 0)) {
+    if (depth == 0 && readIndex(dir, list)) platform::log("library: %s: read index.txt instead", dir.c_str());
     return;
   }
-  while (dirent *e = readdir(d)) {
-    const std::string name = e->d_name;
-    if (name[0] == '.') continue;
-    const std::string path = dir + "/" + name;
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0) continue;
-    if (S_ISDIR(st.st_mode)) {
+  for (const DirItem &it : items) {
+    const std::string path = dir + "/" + it.name;
+    if (it.dir) {
       if (depth < 4) scanDir(path, depth + 1, list);
       continue;
     }
-    if (!endsWithMp3(name)) continue;
-    addFile(path, name, (long)st.st_size, list);
+    if (!endsWithMp3(it.name)) continue;
+    long size = 0;
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0) {
+      size = (long)st.st_size;
+    } else if (FILE *m = std::fopen(path.c_str(), "rb")) {
+      std::fseek(m, 0, SEEK_END);
+      size = std::ftell(m);
+      std::fclose(m);
+    }
+    addFile(path, it.name, size, list);
   }
-  closedir(d);
 }
 
 }  // namespace
