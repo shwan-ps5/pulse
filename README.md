@@ -66,6 +66,10 @@ Pulse stands on a lot of other people's work:
 - The [PS5 homebrew catalog](https://github.com/blackbearreloaded/ps5-homebrew-catalog), also by BlackBearReloaded, for somewhere to list it.
 - [minimp3](https://github.com/lieff/minimp3) by lieff, [stb_image](https://github.com/nothings/stb) by Sean Barrett, and the DejaVu fonts (Bitstream Vera).
 
+## Contributing
+
+It is a hobby project and contributions are welcome: see `CONTRIBUTING.md`.
+
 ## Licence
 
 GPL-3.0-or-later, because the PS5 OpenGL runtime it links is. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.
