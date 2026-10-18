@@ -9,6 +9,11 @@
 
 namespace mapper {
 
+// The play field the generator lays notes on (metres): lane spacing and row spacing at the standard play area. The generator uses
+// these to keep one hand out of the other's follow-through path, so a smaller play area (game::configFor) scales the whole field
+// without changing the maps. game::Config defaults to these.
+constexpr float kLaneW = 0.5f, kRowH = 0.55f;
+
 enum class Difficulty { Easy, Medium, Hard, Extreme };
 const char *name(Difficulty d);
 
@@ -42,7 +47,9 @@ struct Song {
   std::vector<Map> maps;
 };
 
-Song generate(const analysis::Result &r, unsigned seed);
+// hands: 0 both (the normal game), 1 the left hand only, 2 the right hand only: every note is that hand's colour, kept to that
+// hand's three lanes, spaced further apart, with no simultaneous pairs, for one-handed play.
+Song generate(const analysis::Result &r, unsigned seed, int hands = 0);
 bool write(const Song &s, const char *path);
 // Reads a .pulse file (bpm, duration, bars, cues and the note lists). False if it is missing or not one.
 bool read(const char *path, Song &s);

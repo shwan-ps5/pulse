@@ -224,7 +224,6 @@ Result analyse(const std::vector<float> &x, double) {
   r.downbeatPhase = (int)(std::max_element(acc, acc + 4) - acc);
 
   // Bars: four beats each, from the first downbeat.
-  std::vector<float> low, mid, high, energy, density;
   for (size_t i = r.downbeatPhase; i + 4 < r.beats.size(); i += 4) {
     Bar b{};
     b.start = r.beats[i], b.end = r.beats[i + 4];

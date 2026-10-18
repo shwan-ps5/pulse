@@ -24,8 +24,12 @@ view: build/pulse-view
 build/game-test: tests/game_test.cpp core/*.cpp core/*.h game/scores.* analysis/mapper.cpp analysis/analysis.cpp | build
 	$(CXX) $(CXXFLAGS) -std=c++17 -Wall -Wextra -Icore -Ianalysis -Igame -o $@ tests/game_test.cpp core/game.cpp game/scores.cpp analysis/mapper.cpp analysis/analysis.cpp
 
-test: build/game-test
+build/support-test: tests/support_test.cpp game/*.cpp game/*.h analysis/*.cpp audio/mp3.cpp audio/mp3.h audio/minimp3.h third_party/*.h | build
+	$(CXX) $(CXXFLAGS) -std=c++17 -Wall -Wextra -Icore -Ianalysis -Igame -Iaudio -Iplatform -Ithird_party -o $@ tests/support_test.cpp game/library.cpp game/tags.cpp game/scores.cpp analysis/mapper.cpp analysis/analysis.cpp audio/mp3.cpp
+
+test: build/game-test build/support-test
 	./build/game-test
+	./build/support-test
 
 GAME_SRCS = game/main.cpp game/library.cpp game/scores.cpp game/tags.cpp core/game.cpp render/render.cpp analysis/analysis.cpp analysis/mapper.cpp audio/mp3.cpp platform/platform_sdl.cpp platform/vr_desktop.cpp platform/vr_eyes.cpp
 build/game: $(GAME_SRCS) game/*.cpp core/*.h render/*.h audio/*.h analysis/*.h platform/*.h | build

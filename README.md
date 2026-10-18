@@ -31,7 +31,7 @@ folder; backslashes, `./` and full Windows paths are accepted). Make it with `fi
 
 ## Playing
 
-Stick or D-pad and the trigger navigate the menus. If the menu starts off to one side, look straight ahead and press
+Stick or D-pad and the trigger navigate the menus (Circle or Square goes back; Options or Triangle pauses), so either Sense controller works on its own. If the menu starts off to one side, look straight ahead and press
 R3 to centre it (a hint shows until you do). **How to play** in the title menu explains the rules; in short:
 
 - **Easy**: dots, cut in any direction, or just touched with the correct saber (the one matching the block's colour).
@@ -42,7 +42,10 @@ R3 to centre it (a hint shows until you do). **How to play** in the title menu e
 
 A cut scores up to 115 times the multiplier (x2 at 2 in a row, x4 at 6, x8 at 14); a miss or a bad cut resets it. The rank is out of 100, half the share of blocks hit and half the score, so a few misses do not sink it: S 90 and up, A 80, B 70, C 50, D 40, E 30, and F below that.
 The saber is longer on the easier levels for more reach (1.3 m Easy, 1.2 Medium, 1.1 Hard, 1.0 Extreme). Triangle on the song list picks a new pattern for a song. Options has colour-blind and high-contrast palettes, a
-hand swap, and the background: off, flat or 3D.
+hand swap, the background (off, flat or 3D) and the play area: standard, compact or small, which bring the lanes, rows and blocks
+closer together for shorter players, children, seated play or tight spaces; and Hands (both, left only, right only) for one-handed
+play, which generates maps for one hand (its three lanes, every block its colour, longer rests between swings, no pairs) with their own
+scores. The play area re-centres on where you stand at the start of each song.
 
 ## Building
 

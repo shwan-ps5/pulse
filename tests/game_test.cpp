@@ -1,11 +1,14 @@
 // Rules checks: a bot swinging along the cut directions scores, wrong colour / direction / slow
 // swings don't, misses cost the combo, and a full generated map plays through.
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 
 #include "bot.h"
+#include "analysis.h"
 #include "game.h"
+#include "mapper.h"
 #include "scores.h"
 
 using namespace game;
@@ -169,6 +172,45 @@ int main() {
     CHECK(held({{5.0, 1, 1, 0, 1}}, touch, 0).hits == 0, "held saber on an arrow should still miss");
     const Stats wrong = held({{5.0, 1, 1, 0, 8}}, touch, 1);
     CHECK(wrong.hits == 0 && wrong.badCuts == 0, "wrong colour held still: %d hits %d bad", wrong.hits, wrong.badCuts);
+  }
+  // 11. Diagnostics: a blade held still in the block is "touched slow"; one held 40 cm to the side shows the offset, never touches.
+  {
+    std::vector<mapper::Note> notes = {{5.0, 1, 1, 0, 1}};
+    Session inside = play(notes, [&](int, double) { return still(-0.3f, 1.55f); }, 6.0);
+    CHECK(inside.stats().misses == 1 && inside.diag(0).touchedSlow && inside.diag(0).closest < 0.1f, "held in the block: slow %d closest %.2f", inside.diag(0).touchedSlow, (double)inside.diag(0).closest);
+    Session beside = play(notes, [&](int, double) { return still(0.2f, 1.55f); }, 6.0);
+    CHECK(beside.stats().misses == 1 && !beside.diag(0).touchedSlow && beside.diag(0).closest > 0.35f && beside.diag(0).dx > 0.35f, "held beside: closest %.2f dx %.2f", (double)beside.diag(0).closest, (double)beside.diag(0).dx);
+    std::vector<mapper::Note> up = {{5.0, 1, 1, 0, 0}};
+    Bot bot(up);
+    Session wrong = play(notes, [&](int c, double t) { return bot.pose(c, t); }, 6.0);
+    CHECK(wrong.diag(0).reason == 2 && wrong.diag(0).needDeg < 900 && std::fabs(wrong.diag(0).needDeg + 90) < 1, "wrong direction diag: reason %d need %.0f", wrong.diag(0).reason, (double)wrong.diag(0).needDeg);
+  }
+  // 12. One-handed maps: every note is that hand's colour, kept to its three lanes, at least 0.28 s apart, no pairs, and valid.
+  {
+    analysis::Result r;
+    r.duration = 60, r.bpm = 126, r.downbeatPhase = 0;
+    const int frames = (int)(60 * analysis::kFps);
+    for (int b = 0; b < 3; b++) r.band[b].assign(frames, 0.3f), r.energy[b].assign(frames, 0.2f);
+    const double beat = 60.0 / 126;
+    for (double t = 1.0; t < 59; t += beat) r.beats.push_back(t);
+    for (size_t i = 0; i + 4 < r.beats.size(); i += 4) r.bars.push_back({r.beats[i], r.beats[i + 4], 0.5f, 0.4f, 0.3f, 0.5f, 0.5f, 0.6f, analysis::Section::Steady});
+    for (double t = 2.0; t < 58; t += beat / 2) r.peaks.push_back(t), r.peakStrength.push_back(0.6f + 0.4f * std::fmod(t, 1.0));
+    for (int hands = 0; hands < 3; hands++) {
+      const mapper::Song song = mapper::generate(r, 1, hands);
+      for (const auto &m : song.maps) {
+        const auto problems = mapper::validate(m);
+        CHECK(problems.empty(), "hands %d %s: %s", hands, mapper::name(m.difficulty), problems.empty() ? "" : problems[0].c_str());
+        CHECK(m.notes.size() > 10, "hands %d %s has only %zu notes", hands, mapper::name(m.difficulty), m.notes.size());
+        for (size_t i = 0; i < m.notes.size(); i++) {
+          const mapper::Note &n = m.notes[i];
+          if (!hands) continue;
+          CHECK(n.color == hands - 1, "hands %d: note %zu has colour %d", hands, i, n.color);
+          CHECK(hands == 1 ? n.lane <= 2 : n.lane >= 1, "hands %d: note %zu in lane %d", hands, i, n.lane);
+          if (i) CHECK(n.time - m.notes[i - 1].time >= 0.279, "hands %d %s: notes %zu and %zu only %.0f ms apart", hands, mapper::name(m.difficulty), i - 1, i,
+                       (n.time - m.notes[i - 1].time) * 1000);
+        }
+      }
+    }
   }
   // 10. Ranks: S 90, A 80, B 70, C 50, D 40, E 30, F below.
   {

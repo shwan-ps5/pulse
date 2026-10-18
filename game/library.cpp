@@ -211,6 +211,8 @@ void scanDir(const std::string &dir, int depth, std::vector<Entry> &list) {
 
 }  // namespace
 
+bool scanIndex(const std::string &dir, std::vector<Entry> &list) { return readIndex(dir, list); }
+
 // all dirs scanned in order, de-duplicated by id, sorted case-insensitively by title. logs songs found per dir. T: main thread.
 std::vector<Entry> scan(const std::vector<std::string> &dirs) {
   std::vector<Entry> list;
@@ -227,17 +229,18 @@ std::vector<Entry> scan(const std::vector<std::string> &dirs) {
   return list;
 }
 
-// map cache file for (song, seed) at the current kMapperVersion.
-std::string cachePath(const Entry &e, const std::string &cacheDir, int seed) {
-  char buf[48];
-  std::snprintf(buf, sizeof buf, ".v%d.s%d.pulse", kMapperVersion, seed);
+// map cache file for (song, seed, hands) at the current kMapperVersion: <id>.v3.s1.pulse, one-handed maps <id>.v3.s1.h1.pulse.
+std::string cachePath(const Entry &e, const std::string &cacheDir, int seed, int hands) {
+  char buf[56];
+  if (hands) std::snprintf(buf, sizeof buf, ".v%d.s%d.h%d.pulse", kMapperVersion, seed, hands);
+  else std::snprintf(buf, sizeof buf, ".v%d.s%d.pulse", kMapperVersion, seed);
   return cacheDir + "/" + e.id + buf;
 }
 
 // bpm/duration/note counts from the cache if present (no decode); false if never analysed. for the select screen.
-bool cachedInfo(const Entry &e, const std::string &cacheDir, int seed, Info &out) {
+bool cachedInfo(const Entry &e, const std::string &cacheDir, int seed, int hands, Info &out) {
   mapper::Song s;
-  if (!mapper::read(cachePath(e, cacheDir, seed).c_str(), s) || s.maps.size() < 4) return false;
+  if (!mapper::read(cachePath(e, cacheDir, seed, hands).c_str(), s) || s.maps.size() < 4) return false;
   out.bpm = s.bpm, out.duration = s.duration;
   for (int d = 0; d < 4; d++) out.notes[d] = (int)s.maps[d].notes.size();
   return true;
@@ -246,13 +249,13 @@ bool cachedInfo(const Entry &e, const std::string &cacheDir, int seed, Info &out
 // decode mp3 -> track (48 kHz stereo int16); song = cached map or analyse+generate+write cache. false if undecodable or no beat
 // found (<8 beats or <4 bars). blocking: UI shows a loading frame first. memory: caller must have freed the previous song
 // (console heap is finite; see main.cpp loadSongEntry).
-bool load(const Entry &e, const std::string &cacheDir, int seed, audio::Track &track, mapper::Song &song) {
+bool load(const Entry &e, const std::string &cacheDir, int seed, int hands, audio::Track &track, mapper::Song &song) {
   if (!audio::decodeMp3(e.path.c_str(), track)) {
     platform::log("library: cannot decode %s (failed)", e.path.c_str());
     return false;
   }
   platform::log("library: decoded %.1f s", track.frames() / (double)audio::kRate);
-  const std::string cached = cachePath(e, cacheDir, seed);
+  const std::string cached = cachePath(e, cacheDir, seed, hands);
   if (mapper::read(cached.c_str(), song) && song.maps.size() >= 4) return true;
   platform::log("library: analysing");
   const analysis::Result r = analysis::analyse(toAnalysisRate(track));
@@ -261,7 +264,7 @@ bool load(const Entry &e, const std::string &cacheDir, int seed, audio::Track &t
     return false;
   }
   platform::log("library: analysed %.1f BPM, %zu beats", r.bpm, r.beats.size());
-  song = mapper::generate(r, (unsigned)seed);
+  song = mapper::generate(r, (unsigned)seed, hands);
   mkdir(cacheDir.c_str(), 0777);
   platform::log("library: mapped");
   mapper::write(song, cached.c_str());

@@ -10,7 +10,7 @@ pre/post/inv = precondition/postcondition/invariant. U: units. CS: coordinate sp
 
 ## commands
 - desktop game: `make play` (or `./build/game [--songs DIR] [--diff easy|medium|hard|extreme] [--bot] [--screen title|select|options|help|help2|results] [--shot SECONDS out.ppm] [song.mp3 map.pulse]`)
-- tests: `make test` (core rules, ranks, mapper validity). must pass before any push. add a CHECK when you change a rule.
+- tests: `make test` = tests/game_test.cpp (rules, ranks, mapper) + tests/support_test.cpp (tempo, ID3/title tidying, scores file, mp3 decode, library scan/index/cache). must pass before any push. add a CHECK when you change a rule.
 - map tool: `make build/pulse-map && ./build/pulse-map song.mp3 -o dir`; viewer: `make view`.
 - console dev build: `bash ps5/build.sh` -> `build/ps5/dist/PPSA99993` (+ live log to the PC via tools/logsrv.py, UDP 9023).
 - shareable build: `bash ps5/release.sh` -> `build/ps5/dist/Pulse-<ver>.zip` (demo song, no log address, NO network code).
@@ -34,13 +34,16 @@ pre/post/inv = precondition/postcondition/invariant. U: units. CS: coordinate sp
 ## data flow
 mp3 -> `audio::decodeMp3` (48k stereo int16, `track`) -> `library::toAnalysisRate` (22.05k mono float) -> `analysis::analyse` (Result) ->
 `mapper::generate(Result, seed)` (Song: 4 maps + beats + bars + cues) -> cached as `<id>.v<kMapperVersion>.s<seed>.pulse` ->
-`game::Session(notes)` per play. Each frame: sabers[] (scene space) + song time -> `Session::update` -> events -> fx/clicks/haptics.
+`game::Session(notes)` per play. One-handed play (`playHands` 1 left, 2 right) is a mapper mode: `generate(Result, seed, hands)`,
+cached as `<id>.v3.s1.h<N>.pulse`, scores under `id[~seed]^L|^R`; the unused saber is parked below the floor. Each frame: sabers[] (scene space) + song time -> `Session::update` -> events -> fx/clicks/haptics.
 Render: `render::draw(vp, Scene, bg)` per eye (VR) or once (flat). Audio: thread calls `fill()`; `playPos` is the clock.
 
 ## coordinates, units, time
 Scene space: metres, y up, player at origin facing -z, head rest height 1.6. Tracker space -> scene via recentre origin
 (vr::origin; `toScene`/`quatToScene` in main.cpp): subtract origin, undo yaw-only rotation, +1.6 y. Quaternions are (x,y,z,w).
-Note grid: lane 0..3 (x=(lane-1.5)*0.6), row 0..2 (y=1.0+row*0.55), notes fly toward +z, hit plane z=-0.8, speed 14 m/s.
+Note grid: lane 0..3 (x=(lane-1.5)*0.5), row 0..2 (y=1.0+row*0.55), notes fly toward +z, hit plane z=-0.8, speed 14 m/s. That is the STANDARD
+play area (mapper::kLaneW/kRowH are the shared constants); game::configFor(area) shrinks lanes, rows, block size and hit plane for COMPACT (x0.85)
+and SMALL (x0.7) without touching maps. Song start recentres the headset (vr::recenter) so the field centres on the player.
 Song time (s) = playPos/48000; negative during the 3 s lead-in. Never use frame time for judging.
 Cut dir codes: 0 up 1 down 2 left 3 right 4 UL 5 UR 6 DL 7 DR 8 dot 9 vert 10 horiz 11 '/' 12 '\'. color 0 left/red, 1 right/blue.
 

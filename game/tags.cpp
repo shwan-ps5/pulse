@@ -27,10 +27,9 @@ const char kFold[] = "AAAAAAACEEEEIIIIDNOOOOO*OUUUUYTsaaaaaaaceeeeiiiidnooooo/ou
 // append codepoint cp to out: printable ASCII as is, ` and the acute accent as ', Latin-1 letters folded to ASCII via kFold,
 // dashes to '-', Cyrillic А-я/Ё/ё as UTF-8, everything else >=0x100 as '?', control chars as space.
 void put(std::string &out, unsigned cp) {
-  if (cp == 0x60 || cp == 0xB4) out += '\'';
+  if (cp == 0x60 || cp == 0xB4 || cp == 0x2019 || cp == 0x2018) out += '\'';
   else if (cp >= 0x20 && cp < 0x7F) out += (char)cp;
   else if (cp >= 0xC0 && cp <= 0xFF) out += kFold[cp - 0xC0];
-  else if (cp == 0x2019 || cp == 0x2018) out += '\'';
   else if (cp == 0x2013 || cp == 0x2014) out += '-';
   else if (cp == 0x401 || cp == 0x451 || (cp >= 0x410 && cp <= 0x44F)) {
     out += (char)(0xC0 | cp >> 6);
@@ -223,7 +222,7 @@ std::string display(const Info &t, const std::string &stem) {
   std::vector<uint8_t> utf8;
   utf8.push_back(3);
   for (char c : stem) utf8.push_back((uint8_t)c);
-  const std::string file = unsquash(noCopyMark(tidy(noTrackNumber(tidy(decode(utf8.data(), utf8.size()))))));
+  std::string file = unsquash(noCopyMark(tidy(noTrackNumber(tidy(decode(utf8.data(), utf8.size()))))));
   std::string title = tidy(noTrackNumber(t.title));
   if (!t.artist.empty() && title.size() > t.artist.size() + 3 && title.compare(0, t.artist.size() + 3, t.artist + " - ") == 0) title.erase(0, t.artist.size() + 3);
   if (!t.artist.empty() && !title.empty()) return t.artist + " - " + title;

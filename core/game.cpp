@@ -79,6 +79,7 @@ int Session::multiplierFor(int combo) { return combo >= 14 ? 8 : combo >= 6 ? 4 
 Session::Session(const std::vector<mapper::Note> &notes, const Config &cfg) : notes_(notes), cfg_(cfg) {
   std::stable_sort(notes_.begin(), notes_.end(), [](const mapper::Note &a, const mapper::Note &b) { return a.time < b.time; });
   state_.assign(notes_.size(), NoteState::Pending);
+  diag_.assign(notes_.size(), Diag());
   int combo = 0;
   for (size_t i = 0; i < notes_.size(); i++) maxScore_ += 115L * multiplierFor(++combo);
 }
@@ -102,6 +103,7 @@ void Session::restart(double now) {
   maxCombo_ = 0;
   pending_.clear();
   events_.clear();
+  diag_.assign(notes_.size(), Diag());
   for (auto &h : history_) h.clear();
   last_ = -1e9;
   first_ = 0;
@@ -201,6 +203,20 @@ void Session::update(double now, const SaberPose saber[2]) {
       continue;
     }
     const Vec3 centre = notePos(i, now);
+    {
+      // diagnostics for the correct saber: closest approach, speed, touched-but-too-slow. read by the game when the note is missed.
+      Diag &dg = diag_[i];
+      const SaberPose &p = history_[n.color].back().p;
+      const Vec3 d = sub(p.tip, p.base);
+      const float t = std::clamp(dot(sub(centre, p.base), d) / std::max(dot(d, d), 1e-6f), 0.0f, 1.0f);
+      const Vec3 off = sub(lerp(p.base, p.tip, t), centre);
+      const float dist = length(off);
+      if (dist < dg.closest) dg.closest = dist, dg.dx = off.x, dg.dy = off.y, dg.dz = off.z, dg.at = now - n.time;
+      const float sp = length(vel[n.color]);
+      dg.maxSpeed = std::max(dg.maxSpeed, sp);
+      Vec3 hitAt;
+      if (sp < cfg_.minSwingSpeed && !(cfg_.touchCuts && n.dir == 8) && segmentBox(p.base, p.tip, centre, cfg_.noteSize * 0.5f + 0.02f, hitAt)) dg.touchedSlow = true;
+    }
     for (int c = 0; c < 2 && state_[i] == NoteState::Pending; c++) {
       const auto &h = history_[c];
       const float speed = length(vel[c]);
@@ -235,6 +251,10 @@ void Session::update(double now, const SaberPose saber[2]) {
         }
       }
       if (!good) {
+        Diag &dg = diag_[i];
+        dg.reason = n.color != c ? 1 : speed < cfg_.minSwingSpeed * 0.7f ? 3 : 2;
+        dg.swingDeg = std::atan2(vel[c].y, vel[c].x) * 57.29578f;
+        dg.needDeg = dirVector(n.dir, rx, ry, both) ? std::atan2(ry, rx) * 57.29578f : 999.0f;
         resolve(i, NoteState::BadCut, now, c, centre);
         continue;
       }

@@ -141,6 +141,10 @@ std::string optionNote;
 bool userCentred = false;
 int paletteId = 0;
 bool paletteSwap = false;
+int playArea = 0;  // 0 standard, 1 compact, 2 small: game::configFor; for shorter players, children, seated play, tight spaces
+const char *kAreaNames[3] = {"STANDARD", "COMPACT", "SMALL"};
+int playHands = 0;  // 0 both hands, 1 left hand only, 2 right hand only (one-handed play: its own maps and scores)
+const char *kHandsNames[3] = {"BOTH", "LEFT ONLY", "RIGHT ONLY"};
 #ifdef PLATFORM_PS5
 int bgMode = 0;  // off until tried on the headset
 #else
@@ -174,19 +178,23 @@ int seedOf(const std::string &id) {
 }
 
 // The key a song's scores are filed under: another pattern of the same song is its own table.
-// scores.txt key: the song id for seed 1, 'id~seed' otherwise.
+// scores.txt key: the song id for seed 1, 'id~seed' otherwise, plus '^L' or '^R' for one-handed play (its own table).
 std::string scoreKey(const std::string &id) {
   const int sd = seedOf(id);
-  return sd == 1 ? id : id + "~" + std::to_string(sd);
+  std::string key = sd == 1 ? id : id + "~" + std::to_string(sd);
+  if (playHands) key += playHands == 1 ? "^L" : "^R";
+  return key;
 }
 
-// reads settings.txt (palette, swap hands, background mode) and seeds.txt; applies the palette. missing files = defaults.
+// reads settings.txt (palette, swap hands, background mode, play area, hands) and seeds.txt; applies the palette. missing files = defaults.
 void loadSettings() {
   if (FILE *f = std::fopen(STORAGE "settings.txt", "r")) {
-    int p = 0, sw = 0, bg = bgMode;
-    const int got = std::fscanf(f, "%d %d %d", &p, &sw, &bg);
+    int p = 0, sw = 0, bg = bgMode, area = playArea, hands = playHands;
+    const int got = std::fscanf(f, "%d %d %d %d %d", &p, &sw, &bg, &area, &hands);
     if (got >= 2 && p >= 0 && p < render::paletteCount()) paletteId = p, paletteSwap = sw != 0;
     if (got >= 3 && bg >= 0 && bg < 3) bgMode = bg;
+    if (got >= 4 && area >= 0 && area < 3) playArea = area;
+    if (got >= 5 && hands >= 0 && hands < 3) playHands = hands;
     std::fclose(f);
   }
   if (FILE *f = std::fopen(STORAGE "seeds.txt", "r")) {
@@ -202,7 +210,7 @@ void loadSettings() {
 void saveSettings() {
   render::setPalette(paletteId, paletteSwap);
   if (FILE *f = std::fopen(STORAGE "settings.txt", "w")) {
-    std::fprintf(f, "%d %d %d\n", paletteId, paletteSwap ? 1 : 0, bgMode);
+    std::fprintf(f, "%d %d %d %d %d\n", paletteId, paletteSwap ? 1 : 0, bgMode, playArea, playHands);
     std::fclose(f);
   }
 }
@@ -234,10 +242,10 @@ std::string clip(const std::string &s, size_t n) {
 // (re)start the loaded song at the current `diff`: new Session (touchCuts on Easy) and Bot, clear fx, rewind audio to the lead-in.
 void startSong() {
   const auto &notes = song.maps[diff].notes;
-  game::Config cfg;
+  game::Config cfg = game::configFor(playArea);
   cfg.touchCuts = diff == 0;
   session = std::make_unique<game::Session>(notes, cfg);
-  bot = std::make_unique<game::Bot>(notes);
+  bot = std::make_unique<game::Bot>(notes, cfg);
   effects.clear();
   playPos = (long)(-kLeadIn * audio::kRate);
   session->restart(-kLeadIn);
@@ -259,7 +267,9 @@ struct Nav {
   bool up = false, down = false, left = false, right = false, select = false, back = false, options = false, reroll = false;
 };
 
-// combines DualSense and Sense inputs into Nav. stick thresholds 0.6; select = Cross, either trigger; back = Circle or Create.
+// combines DualSense and Sense inputs into Nav. stick thresholds 0.6; select = Cross or either trigger; back = Circle, Create or Square;
+// pause (options) = Options or Triangle. so ONE controller alone can do everything: the left Sense has trigger, Square and Triangle, the
+// right has trigger, Circle and Options. (Square no longer cycles the blade axis from a Sense controller: DualSense only.)
 // edge detection uses file-static previous states: call exactly once per frame.
 Nav readNav() {
   static bool pu, pd, pl, pr, ps, pb, po, pt;
@@ -268,7 +278,8 @@ Nav readNav() {
   const uint32_t b = pad.buttons | sense;
   const bool u = (b & platform::BTN_UP) || y < -0.6f, d = (b & platform::BTN_DOWN) || y > 0.6f, l = (b & platform::BTN_LEFT) || x < -0.6f,
              r = (b & platform::BTN_RIGHT) || x > 0.6f, s = (b & (platform::BTN_CROSS | platform::BTN_L2 | platform::BTN_R2)) || pad.l2 > 0.5f || pad.r2 > 0.5f,
-             k = (b & (platform::BTN_CIRCLE | platform::BTN_CREATE)) != 0, o = (b & platform::BTN_OPTIONS) != 0, t = (b & platform::BTN_TRIANGLE) != 0;
+             k = (b & (platform::BTN_CIRCLE | platform::BTN_CREATE | platform::BTN_SQUARE)) != 0,
+             o = (b & (platform::BTN_OPTIONS | platform::BTN_TRIANGLE)) != 0, t = (b & platform::BTN_TRIANGLE) != 0;
   Nav n;
   n.up = u && !pu, n.down = d && !pd, n.left = l && !pl, n.right = r && !pr, n.select = s && !ps, n.back = k && !pb, n.options = o && !po, n.reroll = t && !pt;
   pu = u, pd = d, pl = l, pr = r, ps = s, pb = k, po = o, pt = t;
@@ -380,26 +391,32 @@ void buildHelp() {
     line("RANK, S TO F: HALF FROM BLOCKS HIT, HALF FROM SCORE");
     panel.add(" ", 0.008f);
     head("CONTROLS");
-    line("R3 CENTRES THE MENU     OPTIONS BUTTON PAUSES");
+    line("R3 CENTRES THE MENU. PAUSE: OPTIONS OR TRIANGLE");
+    line("BACK: CIRCLE OR SQUARE. EITHER CONTROLLER WORKS ALONE");
     line("SABER LENGTH: EASY 1.3 M, MEDIUM 1.2, HARD 1.1, EXTREME 1.0");
     line("TRIANGLE ON SONG SELECT PICKS A NEW PATTERN");
-    line("OPTIONS: COLOUR-BLIND PALETTES, BACKGROUND, RESCAN");
+    line("OPTIONS: COLOUR-BLIND PALETTES, BACKGROUND, RESCAN,");
+    line("PLAY AREA: A SMALLER FIELD FOR SHORTER PLAYERS");
+    line("HANDS: LEFT OR RIGHT ONLY, FOR ONE-HANDED PLAY");
   }
   panel.add(" ", 0.008f);
   panel.add(std::string("LEFT RIGHT PAGE ") + std::to_string(helpPage + 1) + "/" + std::to_string(kHelpPages) + "     BACK TO RETURN", 0.009f, 3);
 }
 
-// colours, background, swap hands, rescan music, back. optionNote shows the rescan result.
+// colours, background, swap hands, play area, hands (one-handed play), rescan music, back. optionNote shows the rescan result.
 void buildOptions() {
   panel.rows.clear();
   panel.preview = true;
   panel.add("OPTIONS", 0.03f, 0);
   panel.add(" ", 0.012f);
-  const std::string rows[5] = {std::string("COLOURS   < ") + render::paletteName(paletteId) + " >", std::string("BACKGROUND   < ") + kBgNames[bgMode] + " >",
-                               std::string("SWAP HANDS   ") + (paletteSwap ? "ON" : "OFF"), "RESCAN MUSIC", "BACK"};
-  for (int i = 0; i < 5; i++) panel.add(std::string(i == optionSel ? "> " : "  ") + rows[i], 0.02f, i == optionSel ? 2 : 1);
+  const std::string rows[7] = {std::string("COLOURS   < ") + render::paletteName(paletteId) + " >", std::string("BACKGROUND   < ") + kBgNames[bgMode] + " >",
+                               std::string("SWAP HANDS   ") + (paletteSwap ? "ON" : "OFF"), std::string("PLAY AREA   < ") + kAreaNames[playArea] + " >",
+                               std::string("HANDS   < ") + kHandsNames[playHands] + " >", "RESCAN MUSIC", "BACK"};
+  for (int i = 0; i < 7; i++) panel.add(std::string(i == optionSel ? "> " : "  ") + rows[i], 0.02f, i == optionSel ? 2 : 1);
   panel.add(" ", 0.012f);
-  if (optionNote.empty()) panel.add("LEFT HAND BLOCK ON THE LEFT, RIGHT HAND ON THE RIGHT", 0.009f, 3);
+  if (optionNote.empty() && optionSel == 4) panel.add("ONE HAND ONLY: EVERY BLOCK IS FOR THAT HAND AND THE PATTERNS ARE SPACED FOR IT", 0.008f, 3);
+  else if (optionNote.empty() && optionSel == 3) panel.add("A SMALLER AREA BRINGS THE BLOCKS CLOSER: SHORTER PLAYERS, CHILDREN, SEATED PLAY", 0.008f, 3);
+  else if (optionNote.empty()) panel.add("LEFT HAND BLOCK ON THE LEFT, RIGHT HAND ON THE RIGHT", 0.009f, 3);
   else panel.add(optionNote, 0.012f, 4);
 }
 
@@ -434,9 +451,9 @@ void buildSelect() {
   panel.add(std::string(diff > 0 ? "< " : "  ") + kDiffLabels[diff] + (diff < 3 ? " >" : "  "), 0.022f, 4);
   const library::Entry &cur = songs[songSel];
   const int sd = seedOf(cur.id);
-  if (infoKey != cur.id + std::to_string(sd)) {
-    infoKey = cur.id + std::to_string(sd);
-    haveInfo = library::cachedInfo(cur, STORAGE "cache", sd, info);
+  if (infoKey != cur.id + std::to_string(sd) + "h" + std::to_string(playHands)) {
+    infoKey = cur.id + std::to_string(sd) + "h" + std::to_string(playHands);
+    haveInfo = library::cachedInfo(cur, STORAGE "cache", sd, playHands, info);
   }
   char line[96];
   if (haveInfo) {
@@ -502,7 +519,7 @@ bool loadSongEntry(const library::Entry &e) {
   platform::log("library: loading %s", clip(e.title, 60).c_str());
   audio::Track t;
   mapper::Song s;
-  if (!library::load(e, STORAGE "cache", seedOf(e.id), t, s)) return false;
+  if (!library::load(e, STORAGE "cache", seedOf(e.id), playHands, t, s)) return false;
 #ifdef PLATFORM_PS5
   platform::log("game: heap in use %zu MiB", ps5_opengl_heap_live_bytes() >> 20);
 #endif
@@ -542,6 +559,8 @@ bool playSong(const library::Entry &e) {
     platform::swap();
   }
   if (!loadSongEntry(e)) return false;
+  vr::recenter();  // the play area centres on where the player stands as the song starts
+  userCentred = true;
   screen = Screen::Playing;
   startSong();
   return true;
@@ -662,6 +681,24 @@ bool writePpm(const char *path, int w, int h) {
 }
 
 // one status line to the log (score, combo, energy, hits...), every 5 s in play.
+// one log line saying why a note was missed or cut badly, from game::Diag: tuning data for reach, speed and direction.
+// reading it: closest = how near the blade came (the block is 0.4 m wide, so under ~20 cm in x/y with dz near 0 means it was in the
+// block's path); dx/dy/dz = blade minus block centre; at = ms before (-) or after (+) the block's time.
+void logWhy(const game::Event &e) {
+  const game::Diag &d = session->diag(e.note);
+  const mapper::Note &n = session->notes()[e.note];
+  static const char *colour[2] = {"red", "blue"};
+  if (e.kind == game::Event::Miss) {
+    platform::log("game: miss note %d at %.1f s lane %d row %d %s dir %d | closest %.0f cm (dx %+.0f dy %+.0f dz %+.0f) at %+.0f ms | tip speed max %.1f m/s | touched slow %s",
+                  e.note, n.time, n.lane, n.row, colour[n.color], n.dir, (double)d.closest * 100, (double)d.dx * 100, (double)d.dy * 100, (double)d.dz * 100, d.at * 1000,
+                  (double)d.maxSpeed, d.touchedSlow ? "yes" : "no");
+  } else {
+    static const char *why[4] = {"?", "wrong colour", "wrong direction", "too slow"};
+    platform::log("game: bad cut note %d at %.1f s lane %d row %d %s dir %d | %s | swung %.0f deg, block asked %s%.0f deg", e.note, n.time, n.lane, n.row, colour[n.color], n.dir,
+                  why[d.reason], (double)d.swingDeg, d.needDeg > 900 ? "any " : "", d.needDeg > 900 ? 0.0 : (double)d.needDeg);
+  }
+}
+
 void report(double now) {
   const game::Stats &st = session->stats();
   platform::log("game: %.1f s  score %ld  combo %d (best %d) x%d  energy %.0f%%  hit %d  miss %d  bad %d  %.1f%% of max", now, st.score, st.combo, st.maxCombo,
@@ -837,6 +874,8 @@ int main(int argc, char **argv) {
       sabers[c] = saberFrom(hands[c]);
 #endif
     }
+    // one-handed play: the hand that is not playing carries no saber (parked out of sight, below the floor)
+    if (inSong && playHands) sabers[playHands == 1 ? 1 : 0] = {{0, -10, 0}, {0, -10, 0}};
     if (mouse && !frame) {
       float mx, my;
       int buttons;
@@ -869,7 +908,7 @@ int main(int argc, char **argv) {
         if (nav.back || (nav.select && helpPage == kHelpPages - 1 && !nav.right)) screen = Screen::Title;
         break;
       case Screen::Options: {
-        step(optionSel, 5, nav);
+        step(optionSel, 7, nav);
         const int dir = (nav.right ? 1 : 0) - (nav.left ? 1 : 0);
         if (optionSel == 0 && (dir || nav.select)) {
           paletteId = (paletteId + (dir ? dir : 1) + render::paletteCount()) % render::paletteCount();
@@ -880,7 +919,14 @@ int main(int argc, char **argv) {
         } else if (optionSel == 2 && (dir || nav.select)) {
           paletteSwap = !paletteSwap;
           saveSettings();
-        } else if (optionSel == 3 && nav.select) {
+        } else if (optionSel == 3 && (dir || nav.select)) {
+          playArea = (playArea + (dir ? dir : 1) + 3) % 3;
+          saveSettings();
+        } else if (optionSel == 4 && (dir || nav.select)) {
+          playHands = (playHands + (dir ? dir : 1) + 3) % 3;
+          saveSettings();
+          infoKey.clear();
+        } else if (optionSel == 5 && nav.select) {
           const std::string keep = songs.empty() ? "" : songs[songSel].id;
           songs = library::scan(dirs);
           songSel = 0;
@@ -889,7 +935,7 @@ int main(int argc, char **argv) {
           artFor.clear();
           optionNote = songs.empty() ? "NO SONGS FOUND" : "FOUND " + std::to_string(songs.size()) + " SONGS";
           platform::log("game: rescan, %zu songs", songs.size());
-        } else if (optionSel == 4 && nav.select) {
+        } else if (optionSel == 6 && nav.select) {
           screen = Screen::Title;
         }
         if (nav.back) screen = Screen::Title;
@@ -925,7 +971,7 @@ int main(int argc, char **argv) {
           break;
         }
         if (padButtons & ~last & platform::BTN_CIRCLE) autoplay = !autoplay, platform::log("game: autoplay %s", autoplay ? "on" : "off");
-        if (edge & platform::BTN_SQUARE) {
+        if (padButtons & ~last & platform::BTN_SQUARE) {
           bladeAxis = (bladeAxis + 1) % 6;
           saveBladeAxis();
           platform::log("game: blade along controller %s", kAxisNames[bladeAxis]);
@@ -935,6 +981,7 @@ int main(int argc, char **argv) {
           for (const game::Event &e : session->takeEvents()) {
             if (e.kind == game::Event::Hit) effects.push_back({e.pos, e.color, now}), click(now, e.color), vr::haptic(e.color, 0.6f);
             else if (e.kind == game::Event::BadCut) effects.push_back({e.pos, 2, now}), vr::haptic(e.color, 0.3f);
+            if (e.kind == game::Event::Miss || e.kind == game::Event::BadCut) logWhy(e);
           }
           if (effects.size() > 200) effects.erase(effects.begin(), effects.begin() + 100);
         }

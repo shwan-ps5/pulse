@@ -91,8 +91,11 @@ int styled(Difficulty d, int dir) {
 }
 
 // one level's map. see file header for the stages. returns empty map if < 8 beats were found.
-Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
-  const Profile p = profile(diff);
+Map build(const analysis::Result &r, Difficulty diff, Rng rng, int hands) {
+  Profile p = profile(diff);
+  // One hand carries every note: fewer of them, and a longer rest between swings (0.28 s, not 0.19 s).
+  const double handGap = hands ? 0.28 : 0.19;
+  if (hands) p.notesPerBeat *= 0.8f;
   Map m{diff, {}};
   if (r.beats.size() < 8) return m;
 
@@ -182,8 +185,8 @@ Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
   for (int idx : chosen) {
     const Slot &s = slots[idx];
     const analysis::Bar *bar = s.bar >= 0 ? &r.bars[s.bar] : nullptr;
-    // A drop opens with both hands together on the downbeat.
-    if (bar && bar->section == Section::Drop && !dropOpened[s.bar] && s.beatIndex % 4 == r.downbeatPhase && s.sub == 0 &&
+    // A drop opens with both hands together on the downbeat (not in one-handed play).
+    if (!hands && bar && bar->section == Section::Drop && !dropOpened[s.bar] && s.beatIndex % 4 == r.downbeatPhase && s.sub == 0 &&
         s.time - lastTime[0] >= 0.19 && s.time - lastTime[1] >= 0.19) {
       dropOpened[s.bar] = true;
       m.notes.push_back({s.time, 1, 1, 0, 1});
@@ -194,10 +197,10 @@ Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
       lastColor = 1;
       continue;
     }
-    int color = 1 - lastColor;
+    int color = hands ? hands - 1 : 1 - lastColor;
     // Alternate hands, but a hand that is still mid-swing from a note this close gives way to the other.
-    if (s.time - lastTime[color] < 0.18 && s.time - lastTime[1 - color] >= 0.18) color = 1 - color;
-    if (s.time - lastTime[color] < 0.19) continue;  // both hands still swinging: this onset goes unplayed
+    if (!hands && s.time - lastTime[color] < 0.18 && s.time - lastTime[1 - color] >= 0.18) color = 1 - color;
+    if (s.time - lastTime[color] < handGap) continue;  // the hand (or both hands) still swinging: this onset goes unplayed
     lastColor = color;
     const bool down = !lastDown[color];  // swing the other way from this hand's last
     const float total = s.bass + s.mid + s.high + 1e-6f;
@@ -222,9 +225,9 @@ Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
       if (s.time - lastTime[o] > 0.4 || s.time - lastTime[o] < -0.01) return false;
       static const float dv[8][2] = {{0, 1}, {0, -1}, {-1, 0}, {1, 0}, {-0.7071f, 0.7071f}, {0.7071f, 0.7071f}, {-0.7071f, -0.7071f}, {0.7071f, -0.7071f}};
       const int d = lastDir[o] < 8 ? lastDir[o] : 1;
-      const float ax = (lastLane[o] - 1.5f) * 0.6f, ay = lastRow[o] * 0.55f;
+      const float ax = (lastLane[o] - 1.5f) * kLaneW, ay = lastRow[o] * kRowH;
       const float bx = ax + dv[d][0] * 0.9f, by = ay + dv[d][1] * 0.9f;
-      const float px = (ln - 1.5f) * 0.6f, py = rw * 0.55f;
+      const float px = (ln - 1.5f) * kLaneW, py = rw * kRowH;
       const float abx = bx - ax, aby = by - ay, t = std::clamp(((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby), 0.0f, 1.0f);
       const float cx = ax + abx * t - px, cy = ay + aby * t - py;
       return std::sqrt(cx * cx + cy * cy) < 0.45f;
@@ -256,7 +259,7 @@ Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
     m.notes.push_back({s.time, lane, row, color, dir});
     lastDown[color] = sideways ? lastDown[color] : down, lastLane[color] = lane, lastRow[color] = row, lastTime[color] = s.time, lastDir[color] = dir;
     // Extreme: strong beats are sometimes hit with both hands at once.
-    if (diff == Difficulty::Extreme && s.sub == 0 && s.score > 0.6f && rng.uniform() < 0.5f) {
+    if (!hands && diff == Difficulty::Extreme && s.sub == 0 && s.score > 0.6f && rng.uniform() < 0.5f) {
       const int o = 1 - color;
       const bool odown = !lastDown[o];
       const int ol = std::clamp(3 - lane, o == 0 ? 0 : 1, o == 0 ? 2 : 3);
@@ -277,8 +280,8 @@ Map build(const analysis::Result &r, Difficulty diff, Rng rng) {
 
 }  // namespace
 
-// 4 maps + cues (per beat: bass/mid/high level normalised to the song's peak, and the section) for the visuals.
-Song generate(const analysis::Result &r, unsigned seed) {
+// hands as in mapper.h (one-handed maps use their own random stream and a longer swing gap). 4 maps + cues (per beat: bass/mid/high level normalised to the song's peak, and the section) for the visuals.
+Song generate(const analysis::Result &r, unsigned seed, int hands) {
   Song s;
   s.bpm = r.bpm, s.duration = r.duration, s.downbeatPhase = r.downbeatPhase, s.beats = r.beats, s.bars = r.bars;
   for (double t : r.beats) {
@@ -291,8 +294,8 @@ Song generate(const analysis::Result &r, unsigned seed) {
   for (auto &c : s.cues) peak[0] = std::max(peak[0], c.bass), peak[1] = std::max(peak[1], c.mid), peak[2] = std::max(peak[2], c.high);
   for (auto &c : s.cues) c.bass /= peak[0], c.mid /= peak[1], c.high /= peak[2];
   for (Difficulty d : {Difficulty::Easy, Difficulty::Medium, Difficulty::Hard, Difficulty::Extreme}) {
-    Rng rng{seed * 2654435761u + (unsigned)d * 40503u + 1};
-    s.maps.push_back(build(r, d, rng));
+    Rng rng{seed * 2654435761u + (unsigned)d * 40503u + 1 + (unsigned)hands * 7919u};
+    s.maps.push_back(build(r, d, rng, hands));
   }
   return s;
 }

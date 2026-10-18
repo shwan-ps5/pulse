@@ -72,7 +72,7 @@ bool mouse(float &x, float &y, int &buttons) {
   int ww, wh;
   SDL_GetWindowSize(window, &ww, &wh);
   x = 2.0f * mx / std::max(ww, 1) - 1, y = 1 - 2.0f * my / std::max(wh, 1);
-  buttons = (b & SDL_BUTTON_LMASK ? 1 : 0) | (b & SDL_BUTTON_RMASK ? 2 : 0);
+  buttons = ((b & SDL_BUTTON_LMASK) ? 1 : 0) | ((b & SDL_BUTTON_RMASK) ? 2 : 0);
   return true;
 }
 
@@ -111,7 +111,7 @@ Pad pad() {
   p.ly = (float)(k[SDL_SCANCODE_DOWN] - k[SDL_SCANCODE_UP]);
   p.ry = (float)(k[SDL_SCANCODE_S] - k[SDL_SCANCODE_W]);
   p.rx = (float)(k[SDL_SCANCODE_E] - k[SDL_SCANCODE_Q]);
-  p.r2 = k[SDL_SCANCODE_LCTRL] || k[SDL_SCANCODE_RETURN];
+  p.r2 = (k[SDL_SCANCODE_LCTRL] || k[SDL_SCANCODE_RETURN]) ? 1.f : 0.f;
   p.l2 = k[SDL_SCANCODE_LSHIFT];
   if (!controller) return p;
   auto axis = [](SDL_GameControllerAxis a) { return SDL_GameControllerGetAxis(controller, a) / 32767.0f; };

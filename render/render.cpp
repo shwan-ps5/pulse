@@ -419,11 +419,11 @@ void noteCube(const Mat4 &vp, const Mat4 &base, float size, int color, int dir, 
 // beyond the horizon, past hitZ+0.12 s, and when z > s.maxZ (so nothing flies through the headset at the eye plane).
 void noteBox(const mapper::Note &n, const game::Config &cfg, const Scene &s, const Mat4 &vp, const float bg[3]) {
   const double dt = n.time - s.now;
-  const double horizon = (80.0 - 0.8) / s.speed;
+  const double horizon = (80.0 + cfg.hitZ) / s.speed;
   if (dt > horizon || dt < -0.12) return;
   const float x = (n.lane - 1.5f) * cfg.laneW, y = cfg.row0 + n.row * cfg.rowH, z = cfg.hitZ - (float)dt * s.speed;
   if (z > s.maxZ) return;
-  float grow = (float)std::min(1.0, (horizon - dt) / 0.25), size = 0.4f * (0.3f + 0.7f * grow);
+  float grow = (float)std::min(1.0, (horizon - dt) / 0.25), size = cfg.noteSize * (0.3f + 0.7f * grow);
   float fog = std::min(1.0f, (float)(dt / horizon)) * 0.85f;
   noteCube(vp, translation(x, y, z), size, n.color, n.dir, fog, bg);
 }

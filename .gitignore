@@ -1,3 +1,6 @@
 build/
 .venv/
 songs/
+.scannerwork/
+sonar-project.properties
+tools/sonar.sh

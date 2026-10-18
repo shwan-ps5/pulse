@@ -21,7 +21,7 @@ struct SaberPose {
 struct Config {
   float noteSpeed = 14;       // m/s toward the player
   float hitZ = -0.8f;         // where a note is at its time
-  float laneW = 0.6f, rowH = 0.55f, row0 = 1.0f;
+  float laneW = mapper::kLaneW, rowH = mapper::kRowH, row0 = 1.0f;
   float noteSize = 0.4f;
   float minSwingSpeed = 1.2f; // m/s of the tip; slower only touches a note
   float missAfter = 0.25f;    // s past its time a note is lost
@@ -29,6 +29,19 @@ struct Config {
   bool noFail = true;
   bool touchCuts = false;     // a dot cut by the correct saber on contact, however slowly it moves (Easy)
 };
+
+// The play area for shorter players, children, seated play or tight spaces: 0 standard, 1 compact, 2 small. Lanes, rows, block size and the
+// distance of the hit plane shrink together about the centre of the field (the middle row stays at 1.55 m), so the blocks sit closer and
+// every pattern still plays; the maps themselves do not change. Blade length (main.cpp) is separate.
+inline Config configFor(int area) {
+  static const float scale[3] = {1.0f, 0.85f, 0.7f};
+  const float k = scale[area < 0 ? 0 : area > 2 ? 2 : area];
+  Config c;
+  c.laneW *= k, c.rowH *= k, c.noteSize *= k;
+  c.hitZ = -0.8f * (0.6f + 0.4f * k);
+  c.row0 = 1.55f - c.rowH;
+  return c;
+}
 
 enum class NoteState : unsigned char { Pending, Hit, BadCut, Missed };
 
@@ -51,6 +64,17 @@ struct Stats {
   long maxScoreSoFar = 0;  // what a perfect run would have scored on the notes resolved so far
 };
 
+// Why a note was missed or cut badly, gathered while it was in reach (diagnostics for tuning, read after the event).
+struct Diag {
+  float closest = 1e9f;        // smallest distance from the correct saber's blade to the note centre, metres
+  float dx = 0, dy = 0, dz = 0;  // blade point minus note centre at that moment (x right, y up, z toward the player)
+  double at = 0;               // seconds relative to the note's time when it was closest (negative = early)
+  float maxSpeed = 0;          // fastest tip speed of that saber while the note was in reach, m/s
+  bool touchedSlow = false;    // the blade touched the block but moved too slowly to cut it
+  int reason = 0;              // BadCut only: 1 wrong colour, 2 wrong direction, 3 too slow
+  float swingDeg = 0, needDeg = 0;  // BadCut: the swing's angle and the one the block asked for (degrees, 0 = right, 90 = up); needDeg 999 = any
+};
+
 class Session {
  public:
   Session(const std::vector<mapper::Note> &notes, const Config &cfg = Config());
@@ -68,6 +92,7 @@ class Session {
   // The events since the last call.
   std::vector<Event> takeEvents();
   long maxScore() const { return maxScore_; }
+  const Diag &diag(size_t i) const { return diag_[i]; }
   static int multiplierFor(int combo);
 
  private:
@@ -92,6 +117,7 @@ class Session {
   std::vector<mapper::Note> notes_;
   Config cfg_;
   std::vector<NoteState> state_;
+  std::vector<Diag> diag_;
   Stats stats_;
   long maxScore_ = 0;
   int maxCombo_ = 0;
