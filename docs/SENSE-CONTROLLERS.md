@@ -51,7 +51,7 @@ Button bits (same as the DualSense PS bits):
 | Left | Stick click | 0x2 (L3) |
 | Left | Upper face button | 0x1000 (Triangle) |
 | Left | Lower face button | 0x8000 (Square) |
-| Left | Create | not seen (0x1 expected, unconfirmed) |
+| Left | Create | opens the system capture menu (screenshots, video); bit not seen by the title |
 | Right | Trigger | 0x200 (R2) plus analog byte 9 |
 | Right | Grip | 0x800 (R1) |
 | Right | Stick click | 0x4 (R3) |
@@ -72,12 +72,27 @@ Offsets 12-27 sometimes return unnormalised or garbage quaternions (one sample r
 w = 1.08), and it sits in a different frame from the tracker's quaternion (differs by tens of degrees). Use the
 tracker pose for orientation; the gyro (bytes 40-51) looks sane if a swing speed is wanted.
 
-## Things not done or not known
-- Haptics on the Sense controllers: `vr::haptic` starts a buzz with `scePadSetVibration` and stops it 60 ms later; not yet
-  confirmed to be felt. Adaptive triggers: not tried. `vr::vibrate` drives the headset's rumble motor (`sceHmd2SetVibration`, 0-25).
-- Finger touch / proximity sensing: not decoded (probably in the touch fields after offset 52).
-- Left Create bit.
-- Latency of pose versus the display: not measured.
+## Open problems (help wanted)
+Each entry says what was tried, so nobody repeats it. Firmware 13.60, a title launched through ps5-opengl.
+
+1. **Controller haptics (the big one).** `scePadSetVibration(handle, &{large, small})` and `scePadSetVibrationMode(handle, mode)`
+   on the Sense handles (pad types 3 and 4) both return `0x80920003` (SCE_PAD_ERROR_INVALID_HANDLE); mode 0 returned `0x80920001`.
+   The same calls are what a DualSense uses, so the Sense pads are probably driven through a VR-specific path. The SDK libScePad
+   stub only has VR calls for reads (`scePadVrControllerRead*`, `...GetDeviceInformation`) and trigger effects
+   (`scePadVrControllerSetTriggerEffect(s)`); no VR haptics export is known. Not tried: a haptics call on the tracker registration
+   handle, the system's own libScePad exports beyond the stub, `sceHmd2` or `VrTracker2` controller calls, the audio-haptics route.
+   One unexplained thing: a buzz in the controllers was felt once at launch from the home screen while every call here reported an error.
+   Pulse's substitute is the headset rumble (`sceHmd2SetVibration(hmd, 0..25)`, `vr::vibrate`): it holds its level until changed, so a
+   buzz needs a timed stop. Pulse calls `vr::haptic` anyway, so a working call in `vr_ps5.cpp` lights up hit and clash feedback at once.
+2. **Adaptive triggers.** Not tried. `scePadVrControllerSetTriggerEffect(s)` is in the SDK stub; `scePadVrControllerReadState` itself
+   failed from a title (see above), so expect the same kind of trouble.
+3. **Finger touch and proximity.** Not decoded; probably in the touch fields after offset 52 of the `scePadReadState` data.
+4. **Left Create button bit.** Not seen by the title: the system takes it and opens its capture menu (screenshots and video), which works as expected. Whether the bit also reaches `scePadReadState` (0x1 expected) is unconfirmed, so do not rely on it for game input.
+5. **Pose latency.** Controller pose against the display is not measured.
+6. **Other firmware.** Hmd2 and VrTracker2 offsets are for 13.60 only; unknown firmware resolves by dlsym or the headset fails to init.
+7. **Standard (non-Pro) PS5.** Not tested; speed and heavier backgrounds in VR are unknown there.
+
+Found something? Open a pull request with the log lines that prove it; see CONTRIBUTING.md.
 
 ## Debug aid
 `vr_ps5.cpp` logs one line per hand per second (and on button changes): pad rc, tracker rc, valid flag,

@@ -46,12 +46,13 @@ struct Scene {
   double clock = 0;  // wall-clock seconds, to animate the background when no song is playing
   int bg = 0;        // the background: 0 none, 1 light, 2 full
   bool bg3d = false; // its rings as geometry in the scene rather than painted on the sky
+  bool plainSabers = false;  // no glow shells round the blades: just the core (the bloom pass still lights it)
   bool hdr = false;  // drawing into the bloom target: lets the sabers burn brighter than white
   float speed = 14;
   int downbeatPhase = 0;
   // Nothing is drawn nearer than this z: the console's GL doesn't clip at the eye plane, so anything
   // crossing it would ghost. A flat camera behind the player can set it far forward.
-  float maxZ = -0.3f;
+  float maxZ = -0.3f;  // nothing may reach past this z (scene space): the eye plane minus a margin. the headset build sets it from the eye position each frame
 };
 
 bool init();

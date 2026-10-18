@@ -18,6 +18,7 @@
 #include "library.h"
 #include "mapper.h"
 #include "mp3.h"
+#include "repeat.h"
 #include "scores.h"
 #include "tags.h"
 
@@ -281,6 +282,31 @@ static void testLibrary() {
   for (const auto &n : again2.maps[0].notes) CHECK(n.color == 0, "left-only map has a right-hand note");
 }
 
+// 6. holding a direction scrolls: one step on a tap, repeats after a pause, faster the longer it is held, nothing when released.
+static void testRepeat() {
+  AutoRepeat r;
+  int steps = 0;
+  CHECK(!r.update(false, 0.0), "idle gives nothing");
+  CHECK(r.update(true, 1.0) && !r.repeated, "the press moves one step, not a repeat");
+  for (double t = 1.0; t < 1.39; t += 1.0 / 60) steps += r.update(true, t);
+  CHECK(steps == 0, "no repeat before the first delay: %d", steps);
+  steps = 0;
+  for (double t = 1.4; t < 1.8; t += 1.0 / 60) steps += r.update(true, t);
+  CHECK(steps >= 3 && steps <= 4, "slow repeat after the pause: %d steps in 0.4 s", steps);
+  CHECK(r.update(false, 1.85) == false, "release stops it");
+  CHECK(r.update(true, 2.0) && !r.repeated, "a new press starts afresh");
+  int fast = 0, slow = 0;
+  double t = 2.0;
+  for (; t < 2.7; t += 1.0 / 60) slow += r.update(true, t);
+  for (; t < 3.5; t += 1.0 / 60) r.update(true, t);
+  for (double u = t; u < t + 0.7; u += 1.0 / 60) fast += r.update(true, u);
+  CHECK(fast > slow * 1.5, "repeat speeds up the longer it is held (%d then %d steps in 0.7 s)", slow, fast);
+  AutoRepeat tap;
+  int taps = 0;
+  for (int i = 0; i < 5; i++) taps += tap.update(true, i * 1.0) + tap.update(false, i * 1.0 + 0.05);
+  CHECK(taps == 5, "five taps give five steps, got %d", taps);
+}
+
 int main() {
   char dir[] = "/tmp/pulse-support-XXXXXX";
   if (!mkdtemp(dir)) return 2;
@@ -290,6 +316,7 @@ int main() {
   testScores();
   testMp3();
   testLibrary();
+  testRepeat();
   const std::string cleanup = "rm -rf " + tmp;
   if (std::system(cleanup.c_str())) std::printf("could not remove %s\n", tmp.c_str());
   std::printf(failures ? "%d FAILED\n" : "support: all passed\n", failures);

@@ -33,13 +33,16 @@ struct Config {
 // The play area for shorter players, children, seated play or tight spaces: 0 standard, 1 compact, 2 small. Lanes, rows, block size and the
 // distance of the hit plane shrink together about the centre of the field (the middle row stays at 1.55 m), so the blocks sit closer and
 // every pattern still plays; the maps themselves do not change. Blade length (main.cpp) is separate.
-inline Config configFor(int area) {
+// seated: the field drops so the middle row is at 1.3 m (the head is 1.6 m after the recentre, seated or not) and the rows sit 10% closer,
+// so nothing needs a reach above the head or down to the floor from a chair. Lanes and block size stay as the area sets them.
+inline Config configFor(int area, bool seated = false) {
   static const float scale[3] = {1.0f, 0.85f, 0.7f};
   const float k = scale[area < 0 ? 0 : area > 2 ? 2 : area];
   Config c;
   c.laneW *= k, c.rowH *= k, c.noteSize *= k;
   c.hitZ = -0.8f * (0.6f + 0.4f * k);
-  c.row0 = 1.55f - c.rowH;
+  if (seated) c.rowH *= 0.9f;
+  c.row0 = (seated ? 1.3f : 1.55f) - c.rowH;
   return c;
 }
 
@@ -126,6 +129,26 @@ class Session {
   std::vector<Event> events_;
   size_t first_ = 0;
   double last_ = -1e9;
+};
+
+// Closest distance between the two blades (segments base->tip), metres; `mid` = halfway between the closest points.
+float bladeGap(const SaberPose &a, const SaberPose &b, Vec3 *mid = nullptr);
+
+// Blade-on-blade contact for spark, clink and haptics. update() once per frame with both poses and the song time:
+// returns the strength 0..1 to buzz both controllers with (0 = nothing this frame) and where they met.
+// contract: fires on the frame the blades first come within kReach (two blades ~3 cm thick each + margin), harder the faster
+// they closed; while they stay together it repeats gently every kGrind s (a scrape), and not again within kGap s of a clash.
+// W: separate from Session: it is feedback only, never touches score. T: main thread, any clock that moves forward.
+class ClashDetector {
+ public:
+  static constexpr float kReach = 0.08f;
+  static constexpr double kGrind = 0.15, kGap = 0.10;
+  float update(double t, const SaberPose pose[2], Vec3 &at);
+
+ private:
+  bool touching_ = false, have_ = false;
+  double lastFire_ = -1e9, lastT_ = 0;
+  Vec3 prevTip_[2];
 };
 
 }  // namespace game

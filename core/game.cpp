@@ -266,4 +266,45 @@ void Session::update(double now, const SaberPose saber[2]) {
   }
 }
 
+// closest points of segments p1-q1 and p2-q2 (Ericson, Real-Time Collision Detection 5.1.9), clamped to the segments.
+float bladeGap(const SaberPose &a, const SaberPose &b, Vec3 *mid) {
+  const Vec3 d1 = sub(a.tip, a.base), d2 = sub(b.tip, b.base), r = sub(a.base, b.base);
+  const float aa = dot(d1, d1), e = dot(d2, d2), f = dot(d2, r);
+  float s, t;
+  if (aa < 1e-9f && e < 1e-9f) s = t = 0;
+  else if (aa < 1e-9f) s = 0, t = std::min(1.0f, std::max(0.0f, f / e));
+  else {
+    const float c = dot(d1, r);
+    if (e < 1e-9f) s = std::min(1.0f, std::max(0.0f, -c / aa)), t = 0;
+    else {
+      const float bb = dot(d1, d2), den = aa * e - bb * bb;
+      s = den > 1e-9f ? std::min(1.0f, std::max(0.0f, (bb * f - c * e) / den)) : 0.0f;
+      t = (bb * s + f) / e;
+      if (t < 0) t = 0, s = std::min(1.0f, std::max(0.0f, -c / aa));
+      else if (t > 1) t = 1, s = std::min(1.0f, std::max(0.0f, (bb - c) / aa));
+    }
+  }
+  const Vec3 p = lerp(a.base, a.tip, s), q = lerp(b.base, b.tip, t);
+  if (mid) *mid = lerp(p, q, 0.5f);
+  return length(sub(p, q));
+}
+
+float ClashDetector::update(double t, const SaberPose pose[2], Vec3 &at) {
+  const bool near = bladeGap(pose[0], pose[1], &at) < kReach;
+  float strength = 0;
+  if (near && have_ && t > lastT_) {
+    // how fast the tips closed on each other (m/s), from the tips' change since the last call
+    const Vec3 now = sub(pose[0].tip, pose[1].tip), before = sub(prevTip_[0], prevTip_[1]);
+    const float speed = length(sub(now, before)) / (float)(t - lastT_);
+    const bool fresh = !touching_ && t - lastFire_ >= kGap;
+    if (fresh) strength = std::min(1.0f, 0.35f + 0.08f * speed);
+    else if (touching_ && t - lastFire_ >= kGrind) strength = 0.25f;
+    if (strength > 0) lastFire_ = t;
+  }
+  touching_ = near;
+  prevTip_[0] = pose[0].tip, prevTip_[1] = pose[1].tip;
+  lastT_ = t, have_ = true;
+  return strength;
+}
+
 }  // namespace game

@@ -225,6 +225,121 @@ int main() {
                                                          {40, "D"}, {39.9f, "E"}, {30, "E"}, {29.9f, "F"}, {0, "F"}};
   for (const auto &e : edges) CHECK(std::string(scores::rank(e.r)) == e.rank, "rating %.1f should be %s, got %s", (double)e.r, e.rank, scores::rank(e.r));
   }
+  // 13. The demo player: human-like but still good, repeatable, and its blade stays a blade.
+  {
+    analysis::Result r;
+    r.duration = 60, r.bpm = 126, r.downbeatPhase = 0;
+    const int frames = (int)(60 * analysis::kFps);
+    for (int b = 0; b < 3; b++) r.band[b].assign(frames, 0.3f), r.energy[b].assign(frames, 0.2f);
+    const double beat = 60.0 / 126;
+    for (double t = 1.0; t < 59; t += beat) r.beats.push_back(t);
+    for (size_t i = 0; i + 4 < r.beats.size(); i += 4) r.bars.push_back({r.beats[i], r.beats[i + 4], 0.5f, 0.4f, 0.3f, 0.5f, 0.5f, 0.6f, analysis::Section::Steady});
+    for (double t = 2.0; t < 58; t += beat / 2) r.peaks.push_back(t), r.peakStrength.push_back(0.6f + 0.4f * std::fmod(t, 1.0));
+    const mapper::Song song = mapper::generate(r, 1);
+    for (const auto &m : song.maps) {
+      BotStyle style;
+      style.human = true, style.bpm = 126, style.blade = 1.2f;
+      Bot human(m.notes, Config(), 0.03f, 0.8f, 0.09f, style), again(m.notes, Config(), 0.03f, 0.8f, 0.09f, style), robot(m.notes);
+      Config cfg;
+      cfg.touchCuts = m.difficulty == mapper::Difficulty::Easy;
+      Session s(m.notes, cfg);
+      double moved = 0, highest = 0;
+      int overhead = 0, parallel = 0;
+      for (double t = 0; t < song.duration + 1; t += 1.0 / 90) {
+        const SaberPose p[2] = {human.pose(0, t), human.pose(1, t)};
+        s.update(t, p);
+        const SaberPose q = again.pose(0, t), z = robot.pose(0, t);
+        CHECK(q.base.x == p[0].base.x && q.tip.y == p[0].tip.y, "the demo is repeatable");
+        moved = std::max(moved, (double)std::fabs(p[0].base.y - z.base.y));
+        const float bx = p[1].tip.x - p[1].base.x, by = p[1].tip.y - p[1].base.y, bz = p[1].tip.z - p[1].base.z;
+        const float len = std::sqrt(bx * bx + by * by + bz * bz);
+        CHECK(std::fabs(len - 1.2f) < 1e-3f && bz < -0.1f, "blade %.3f m, pointing %.2f", (double)len, (double)bz);
+        for (int c = 0; c < 2; c++) {
+          highest = std::max(highest, (double)p[c].base.y);
+          CHECK(p[c].base.y < 1.55f && std::fabs(p[c].base.x) < 0.9f, "hand at (%.2f, %.2f): arms, not a cursor floating overhead", (double)p[c].base.x, (double)p[c].base.y);
+        }
+        if (p[0].tip.y > 1.9f && p[1].tip.y > 1.9f) {  // both blades up high: they must fan out, not run side by side
+          const float ax = p[0].tip.x - p[0].base.x, ay = p[0].tip.y - p[0].base.y, az = p[0].tip.z - p[0].base.z;
+          const float cosang = (ax * bx + ay * by + az * bz) / (1.2f * len);
+          overhead++;
+          if (cosang > 0.9986f) parallel++;  // within 3 degrees
+        }
+      }
+      const Stats &st = s.stats();
+      std::printf("human %-7s %4zu notes: %4d hit %2d miss %2d bad\n", mapper::name(m.difficulty), m.notes.size(), st.hits, st.misses, st.badCuts);
+      CHECK(st.hits >= (int)(m.notes.size() * 0.85), "human bot should still hit most: %d of %zu", st.hits, m.notes.size());
+      CHECK(st.hits < (int)m.notes.size() || m.notes.size() < 100, "a human bot should miss a few: %d of %zu", st.hits, m.notes.size());
+      CHECK(overhead == 0 || parallel < overhead / 10 + 2, "blades run parallel overhead %d of %d frames", parallel, overhead);
+      CHECK(highest < 1.55, "hands reached %.2f m", highest);
+      CHECK(moved > 0.02, "the human bot's hands differ from the robot's (by %.3f m)", moved);
+    }
+  }
+  // 14. Blade on blade: distance, and when the clash feedback fires.
+  {
+    const SaberPose x{{-0.5f, 1.0f, -0.35f}, {0.5f, 1.0f, -0.35f}}, crossing{{0.0f, 0.5f, -0.35f}, {0.0f, 1.5f, -0.35f}};
+    Vec3 mid;
+    CHECK(std::fabs(bladeGap(x, crossing, &mid)) < 1e-4f && std::fabs(mid.x) < 1e-3f && std::fabs(mid.y - 1.0f) < 1e-3f, "crossing blades touch at (0,1)");
+    const SaberPose behind{{0.0f, 0.5f, -0.75f}, {0.0f, 1.5f, -0.75f}};
+    CHECK(std::fabs(bladeGap(x, behind) - 0.4f) < 1e-4f, "0.4 m apart in depth: %.4f", (double)bladeGap(x, behind));
+    const SaberPose para{{-0.5f, 1.3f, -0.35f}, {0.5f, 1.3f, -0.35f}};
+    CHECK(std::fabs(bladeGap(x, para) - 0.3f) < 1e-4f, "parallel 0.3 m apart: %.4f", (double)bladeGap(x, para));
+    const SaberPose endOff{{1.0f, 1.0f, -0.35f}, {2.0f, 1.0f, -0.35f}};
+    CHECK(std::fabs(bladeGap(x, endOff) - 0.5f) < 1e-4f, "end to end 0.5 m: %.4f", (double)bladeGap(x, endOff));
+    CHECK(std::fabs(bladeGap(x, x)) < 1e-4f, "a blade on itself");
+
+    ClashDetector c;
+    auto at = [&](double t, float gap) {  // the second blade at `gap` metres below the first, held parallel
+      const SaberPose p[2] = {x, {{-0.5f, 1.0f - gap, -0.35f}, {0.5f, 1.0f - gap, -0.35f}}};
+      Vec3 w;
+      return c.update(t, p, w);
+    };
+    CHECK(at(0.00, 0.5f) == 0 && at(0.01, 0.4f) == 0 && at(0.02, 0.3f) == 0, "apart: no clash");
+    const float hit = at(0.03, 0.04f);
+    CHECK(hit >= 0.35f && hit <= 1.0f, "first contact fires, strength %.2f", (double)hit);
+    CHECK(at(0.04, 0.03f) == 0 && at(0.05, 0.03f) == 0, "stays quiet right after");
+    const float scrape = at(0.20, 0.03f);
+    CHECK(scrape > 0 && scrape < hit, "a long contact scrapes gently (%.2f vs %.2f)", (double)scrape, (double)hit);
+    CHECK(at(0.21, 0.3f) == 0, "parting is silent");
+    CHECK(at(0.22, 0.03f) == 0, "touching again within 0.1 s of the last buzz is ignored");
+    at(0.30, 0.3f);
+    const float fast = at(0.31, 0.0f), slow = [&] { ClashDetector d; Vec3 w; SaberPose p[2] = {x, {{-0.5f, 0.9f, -0.35f}, {0.5f, 0.9f, -0.35f}}}; d.update(0, p, w); p[1] = {{-0.5f, 0.95f, -0.35f}, {0.5f, 0.95f, -0.35f}}; p[1].base.y = p[1].tip.y = 0.95f; return d.update(0.1, p, w); }();
+    CHECK(fast > slow, "a harder hit buzzes harder (%.2f vs %.2f)", (double)fast, (double)slow);
+  }
+  // 15. No long empty stretches: a 40 s break with no onsets still gets blocks, at every level, in both-hand and one-hand maps.
+  {
+    analysis::Result r;
+    r.duration = 90, r.bpm = 126, r.downbeatPhase = 0;
+    const int frames = (int)(90 * analysis::kFps);
+    for (int b = 0; b < 3; b++) r.band[b].assign(frames, 0.3f), r.energy[b].assign(frames, 0.2f);
+    const double beat = 60.0 / 126;
+    for (double t = 1.0; t < 89; t += beat) r.beats.push_back(t);
+    for (size_t i = 0; i + 4 < r.beats.size(); i += 4) {
+      const bool quiet = r.beats[i] > 20 && r.beats[i] < 60;
+      r.bars.push_back({r.beats[i], r.beats[i + 4], 0.5f, 0.4f, 0.3f, 0.5f, 0.5f, quiet ? 0.1f : 0.6f, quiet ? analysis::Section::Break : analysis::Section::Steady});
+    }
+    for (double t = 2.0; t < 88; t += beat / 2)
+      if (t < 20 || t > 60) r.peaks.push_back(t), r.peakStrength.push_back(0.6f + 0.4f * std::fmod(t, 1.0));
+    for (int hands = 0; hands < 3; hands++) {
+      const mapper::Song song = mapper::generate(r, 1, hands);
+      for (const auto &m : song.maps) {
+        double worst = 0, last = 2.0;
+        for (const auto &n : m.notes) worst = std::max(worst, n.time - last), last = n.time;
+        const double limit = m.difficulty == mapper::Difficulty::Easy ? 4.5 : 4.0;
+        CHECK(worst <= limit, "hands %d %s: %.1f s without a block", hands, mapper::name(m.difficulty), worst);
+        const auto problems = mapper::validate(m);
+        CHECK(problems.empty(), "hands %d %s with fill notes: %s", hands, mapper::name(m.difficulty), problems.empty() ? "" : problems[0].c_str());
+      }
+    }
+  }
+  // 16. Seated play lowers and tightens the field at every area; lanes and block size are untouched.
+  for (int area = 0; area < 3; area++) {
+    const game::Config st = game::configFor(area), se = game::configFor(area, true);
+    const float top = se.row0 + 2 * se.rowH, bottom = se.row0;
+    CHECK(se.laneW == st.laneW && se.noteSize == st.noteSize && se.hitZ == st.hitZ, "area %d: seated keeps lanes, size and hit plane", area);
+    CHECK(top < st.row0 + 2 * st.rowH && bottom < st.row0 + st.rowH * 0.5f + 0.5f, "area %d: seated top row %.2f is lower than standing %.2f", area, (double)top, (double)(st.row0 + 2 * st.rowH));
+    CHECK(top < 1.6f + 0.25f && bottom > 0.7f, "area %d: seated rows %.2f..%.2f stay within sitting reach", area, (double)bottom, (double)top);
+    CHECK(std::fabs(se.row0 + se.rowH - 1.3f) < 1e-4f, "area %d: seated middle row at 1.3 m", area);
+  }
   std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures ? 1 : 0;
 }

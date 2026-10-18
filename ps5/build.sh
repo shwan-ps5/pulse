@@ -34,7 +34,7 @@ else
     song=${PULSE_SONG:-$root/ps5/demo/Pulse Demo - Neon Run.mp3}
     [[ -e $song ]] || { echo "missing: $song (PULSE_SONG)" >&2; exit 2; }
     cp "$root/game/main.cpp" "$stage/src/main.cpp"
-    cp "$root"/game/{library.cpp,library.h,scores.cpp,scores.h,tags.cpp,tags.h} "$stage/src/"
+    cp "$root"/game/{library.cpp,library.h,scores.cpp,scores.h,tags.cpp,tags.h,repeat.h} "$stage/src/"
     cp "$root"/core/{game.cpp,game.h,bot.h} "$root"/render/{render.cpp,render.h,fontatlas.h} "$root"/analysis/{analysis.cpp,analysis.h,mapper.cpp,mapper.h} \
         "$root"/audio/{mp3.cpp,mp3.h,minimp3.h} "$root"/third_party/stb_image.h "$stage/src/"
     mkdir -p "$stage/assets/songs"

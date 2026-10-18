@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "bot.h"
+#include "repeat.h"
 #include "game.h"
 #include "gl.h"
 #include "library.h"
@@ -118,7 +119,7 @@ void fill(float *out, int frames) {
 // queue a hit click at song time `now` (main thread); drops the oldest if > 64 are pending.
 void click(double now, int colour) {
   std::lock_guard<std::mutex> lock(voiceLock);
-  voices.push_back({(long)(now * audio::kRate), colour == 1 ? 1300.0f : 1900.0f});
+  voices.push_back({(long)(now * audio::kRate), colour == 2 ? 3200.0f : colour == 1 ? 1300.0f : 1900.0f});  // 2 = blades clinking
   if (voices.size() > 64) voices.erase(voices.begin());
 }
 
@@ -131,9 +132,14 @@ bool songLoaded = false;
 int diff = 1;
 std::unique_ptr<game::Session> session;
 std::unique_ptr<game::Bot> bot;
+game::ClashDetector clash;
 std::vector<render::Fx> effects;
 game::SaberPose sabers[2] = {{{-0.25f, 1.0f, -0.35f}, {-0.25f, 1.0f, -1.35f}}, {{0.25f, 1.0f, -0.35f}, {0.25f, 1.0f, -1.35f}}};
 bool autoplay = false, paused = false, quitRequested = false;
+bool demoRun = false;   // title DEMO: a random song and level on the autoplay bot; any button stops it and returns to the title. no score is kept
+bool restAutoplay = false;  // what autoplay is outside a demo (the bot on a desktop with no headset or mouse)
+std::string titleNote;
+int demoDiffBefore = 1; // the level the song list had selected, restored when the demo ends
 std::vector<library::Entry> songs;
 std::string songId, songTitle, statusLine;
 int titleSel = 0, songSel = 0, pauseSel = 0, resultSel = 0, optionSel = 0, helpPage = 0;
@@ -141,8 +147,12 @@ std::string optionNote;
 bool userCentred = false;
 int paletteId = 0;
 bool paletteSwap = false;
+bool seated = false;       // Options SEATED: the field sits lower and tighter (game::configFor) for a chair or wheelchair
+bool showHints = true;     // Options HINTS: button reminders under the menus and at the start of a song
+bool plainSabers = false;  // Options SABER GLOW off: bare blades, only the bloom lights them
 int playArea = 0;  // 0 standard, 1 compact, 2 small: game::configFor; for shorter players, children, seated play, tight spaces
-const char *kAreaNames[3] = {"STANDARD", "COMPACT", "SMALL"};
+// named by the width of the block field (4 lanes: 2.0 / 1.7 / 1.4 m, game::configFor) so the order is obvious
+const char *kAreaNames[3] = {"NORMAL 2.0 M", "MEDIUM 1.7 M", "SMALL 1.4 M"};
 int playHands = 0;  // 0 both hands, 1 left hand only, 2 right hand only (one-handed play: its own maps and scores)
 const char *kHandsNames[3] = {"BOTH", "LEFT ONLY", "RIGHT ONLY"};
 #ifdef PLATFORM_PS5
@@ -189,12 +199,15 @@ std::string scoreKey(const std::string &id) {
 // reads settings.txt (palette, swap hands, background mode, play area, hands) and seeds.txt; applies the palette. missing files = defaults.
 void loadSettings() {
   if (FILE *f = std::fopen(STORAGE "settings.txt", "r")) {
-    int p = 0, sw = 0, bg = bgMode, area = playArea, hands = playHands;
-    const int got = std::fscanf(f, "%d %d %d %d %d", &p, &sw, &bg, &area, &hands);
+    int p = 0, sw = 0, bg = bgMode, area = playArea, hands = playHands, plain = 0, hints = 1, seat = 0;
+    const int got = std::fscanf(f, "%d %d %d %d %d %d %d %d", &p, &sw, &bg, &area, &hands, &plain, &hints, &seat);
     if (got >= 2 && p >= 0 && p < render::paletteCount()) paletteId = p, paletteSwap = sw != 0;
     if (got >= 3 && bg >= 0 && bg < 3) bgMode = bg;
     if (got >= 4 && area >= 0 && area < 3) playArea = area;
     if (got >= 5 && hands >= 0 && hands < 3) playHands = hands;
+    if (got >= 6) plainSabers = plain != 0;
+    if (got >= 7) showHints = hints != 0;
+    if (got >= 8) seated = seat != 0;
     std::fclose(f);
   }
   if (FILE *f = std::fopen(STORAGE "seeds.txt", "r")) {
@@ -210,7 +223,7 @@ void loadSettings() {
 void saveSettings() {
   render::setPalette(paletteId, paletteSwap);
   if (FILE *f = std::fopen(STORAGE "settings.txt", "w")) {
-    std::fprintf(f, "%d %d %d %d %d\n", paletteId, paletteSwap ? 1 : 0, bgMode, playArea, playHands);
+    std::fprintf(f, "%d %d %d %d %d %d %d %d\n", paletteId, paletteSwap ? 1 : 0, bgMode, playArea, playHands, plainSabers ? 1 : 0, showHints ? 1 : 0, seated ? 1 : 0);
     std::fclose(f);
   }
 }
@@ -239,14 +252,34 @@ std::string clip(const std::string &s, size_t n) {
   return s.substr(0, k) + "..";
 }
 
+// controller buzz, except in a demo (the controllers are lying on the table; the bot is the one playing).
+void buzz(int side, float strength) {
+  if (!autoplay) vr::haptic(side, strength);
+}
+
+float bladeLength();  // defined with the saber code below
+
+// The headset's own rumble motor (the Sense controllers' haptics are not reachable from a title yet, see docs/SENSE-CONTROLLERS.md).
+// vr::vibrate holds a level until changed, so a buzz is a level plus an end time (wall clock); main() applies it every frame.
+// 0..1 of the motor's range; a clash is the strongest feedback, a bad cut a faint one.
+float headLevel = 0;
+double headUntil = 0;
+void headBuzz(float strength, double seconds) {
+  headLevel = std::max(headLevel * (platform::seconds() < headUntil ? 1.0f : 0.0f), strength);
+  headUntil = platform::seconds() + seconds;
+}
+
 // (re)start the loaded song at the current `diff`: new Session (touchCuts on Easy) and Bot, clear fx, rewind audio to the lead-in.
 void startSong() {
   const auto &notes = song.maps[diff].notes;
-  game::Config cfg = game::configFor(playArea);
+  game::Config cfg = game::configFor(playArea, seated);
   cfg.touchCuts = diff == 0;
   session = std::make_unique<game::Session>(notes, cfg);
-  bot = std::make_unique<game::Bot>(notes, cfg);
+  game::BotStyle style;
+  style.human = true, style.bpm = (float)(song.bpm > 0 ? song.bpm : 120), style.blade = bladeLength(), style.seed = (unsigned)diff + 1;
+  bot = std::make_unique<game::Bot>(notes, cfg, 0.03f, 0.8f, 0.09f, style);
   effects.clear();
+  clash = game::ClashDetector();
   playPos = (long)(-kLeadIn * audio::kRate);
   session->restart(-kLeadIn);
   paused = false;
@@ -265,6 +298,7 @@ void takeSense(const vr::Hand &h) {
 // menu intent this frame, as edge-triggered presses (not held): move, select, back, options/pause, reroll (Triangle).
 struct Nav {
   bool up = false, down = false, left = false, right = false, select = false, back = false, options = false, reroll = false;
+  bool repeated = false;  // this up/down came from holding the stick (auto-repeat), not a fresh press
 };
 
 // combines DualSense and Sense inputs into Nav. stick thresholds 0.6; select = Cross or either trigger; back = Circle, Create or Square;
@@ -272,7 +306,8 @@ struct Nav {
 // right has trigger, Circle and Options. (Square no longer cycles the blade axis from a Sense controller: DualSense only.)
 // edge detection uses file-static previous states: call exactly once per frame.
 Nav readNav() {
-  static bool pu, pd, pl, pr, ps, pb, po, pt;
+  static bool pl, pr, ps, pb, po, pt;
+  static AutoRepeat repeatUp, repeatDown;  // up and down repeat while held (long lists); the rest are single presses
   const platform::Pad pad = platform::pad();
   const float x = std::fabs(senseX) > std::fabs(pad.lx) ? senseX : pad.lx, y = std::fabs(senseY) > std::fabs(pad.ly) ? senseY : pad.ly;
   const uint32_t b = pad.buttons | sense;
@@ -281,16 +316,16 @@ Nav readNav() {
              k = (b & (platform::BTN_CIRCLE | platform::BTN_CREATE | platform::BTN_SQUARE)) != 0,
              o = (b & (platform::BTN_OPTIONS | platform::BTN_TRIANGLE)) != 0, t = (b & platform::BTN_TRIANGLE) != 0;
   Nav n;
-  n.up = u && !pu, n.down = d && !pd, n.left = l && !pl, n.right = r && !pr, n.select = s && !ps, n.back = k && !pb, n.options = o && !po, n.reroll = t && !pt;
-  pu = u, pd = d, pl = l, pr = r, ps = s, pb = k, po = o, pt = t;
+  n.up = repeatUp.update(u, platform::seconds()), n.down = repeatDown.update(d, platform::seconds()), n.repeated = repeatUp.repeated || repeatDown.repeated, n.left = l && !pl, n.right = r && !pr, n.select = s && !ps, n.back = k && !pb, n.options = o && !po, n.reroll = t && !pt;
+  pl = l, pr = r, ps = s, pb = k, po = o, pt = t;
   return n;
 }
 
 // Moves a menu cursor.
-// wraps a menu cursor on up/down presses.
+// wraps a menu cursor on up/down presses; auto-repeat from a held stick stops at the ends.
 void step(int &sel, int count, const Nav &n) {
-  if (n.up) sel = (sel + count - 1) % count;
-  if (n.down) sel = (sel + 1) % count;
+  if (n.up && !(n.repeated && sel == 0)) sel = (sel + count - 1) % count;                  // a press wraps; held, the list stops at its end
+  if (n.down && !(n.repeated && sel == count - 1)) sel = (sel + 1) % count;
 }
 
 // which controller axis the blade lies along (kAxes): persisted in blade-axis.txt, cycled with Square. default -z.
@@ -355,8 +390,13 @@ void buildTitle() {
   panel.add("PULSE", 0.05f, 0);
   panel.add("RHYTHM SABERS", 0.014f, 3);
   panel.add(" ", 0.02f);
-  const char *items[4] = {"PLAY", "HOW TO PLAY", "OPTIONS", "QUIT"};
-  for (int i = 0; i < 4; i++) panel.add(std::string(i == titleSel ? "> " : "  ") + items[i], 0.022f, i == titleSel ? 2 : 1);
+  const char *items[5] = {"PLAY", "DEMO", "HOW TO PLAY", "OPTIONS", "QUIT"};
+  for (int i = 0; i < 5; i++) panel.add(std::string(i == titleSel ? "> " : "  ") + items[i], 0.022f, i == titleSel ? 2 : 1);
+  if (!titleNote.empty()) panel.add(titleNote, 0.012f, 5);
+  if (showHints) {
+    panel.add(" ", 0.012f);
+    panel.add("UP DOWN CHOOSE   TRIGGER SELECT   R3 CENTRES THE VIEW", 0.009f, 3);
+  }
 }
 
 constexpr int kHelpPages = 2;
@@ -396,8 +436,8 @@ void buildHelp() {
     line("SABER LENGTH: EASY 1.3 M, MEDIUM 1.2, HARD 1.1, EXTREME 1.0");
     line("TRIANGLE ON SONG SELECT PICKS A NEW PATTERN");
     line("OPTIONS: COLOUR-BLIND PALETTES, BACKGROUND, RESCAN,");
-    line("PLAY AREA: A SMALLER FIELD FOR SHORTER PLAYERS");
-    line("HANDS: LEFT OR RIGHT ONLY, FOR ONE-HANDED PLAY");
+    line("PLAY AREA: A SMALLER, EASIER FIELD (WIDTH IN METRES)");
+    line("HANDS: LEFT OR RIGHT ONLY. SEATED: A LOWER FIELD");
   }
   panel.add(" ", 0.008f);
   panel.add(std::string("LEFT RIGHT PAGE ") + std::to_string(helpPage + 1) + "/" + std::to_string(kHelpPages) + "     BACK TO RETURN", 0.009f, 3);
@@ -409,13 +449,15 @@ void buildOptions() {
   panel.preview = true;
   panel.add("OPTIONS", 0.03f, 0);
   panel.add(" ", 0.012f);
-  const std::string rows[7] = {std::string("COLOURS   < ") + render::paletteName(paletteId) + " >", std::string("BACKGROUND   < ") + kBgNames[bgMode] + " >",
+  const std::string rows[10] = {std::string("COLOURS   < ") + render::paletteName(paletteId) + " >", std::string("BACKGROUND   < ") + kBgNames[bgMode] + " >",
                                std::string("SWAP HANDS   ") + (paletteSwap ? "ON" : "OFF"), std::string("PLAY AREA   < ") + kAreaNames[playArea] + " >",
-                               std::string("HANDS   < ") + kHandsNames[playHands] + " >", "RESCAN MUSIC", "BACK"};
-  for (int i = 0; i < 7; i++) panel.add(std::string(i == optionSel ? "> " : "  ") + rows[i], 0.02f, i == optionSel ? 2 : 1);
+                               std::string("HANDS   < ") + kHandsNames[playHands] + " >", std::string("SEATED   ") + (seated ? "ON" : "OFF"), std::string("SABER GLOW   ") + (plainSabers ? "OFF" : "ON"), std::string("HINTS   ") + (showHints ? "ON" : "OFF"), "RESCAN MUSIC", "BACK"};
+  for (int i = 0; i < 10; i++) panel.add(std::string(i == optionSel ? "> " : "  ") + rows[i], 0.02f, i == optionSel ? 2 : 1);
   panel.add(" ", 0.012f);
-  if (optionNote.empty() && optionSel == 4) panel.add("ONE HAND ONLY: EVERY BLOCK IS FOR THAT HAND AND THE PATTERNS ARE SPACED FOR IT", 0.008f, 3);
-  else if (optionNote.empty() && optionSel == 3) panel.add("A SMALLER AREA BRINGS THE BLOCKS CLOSER: SHORTER PLAYERS, CHILDREN, SEATED PLAY", 0.008f, 3);
+  if (optionNote.empty() && optionSel == 5) panel.add("FOR A CHAIR OR WHEELCHAIR: THE BLOCKS COME LOWER, NO HIGH REACH", 0.008f, 3);
+  else if (optionNote.empty() && optionSel == 6) panel.add("OFF: BARE BLADES WITH NO LIGHT AROUND THEM, ONLY THE BLOOM", 0.008f, 3);
+  else if (optionNote.empty() && optionSel == 4) panel.add("ONE HAND ONLY: EVERY BLOCK IS FOR THAT HAND AND THE PATTERNS ARE SPACED FOR IT", 0.008f, 3);
+  else if (optionNote.empty() && optionSel == 3) panel.add("A SMALLER FIELD BRINGS THE BLOCKS CLOSER AND IS EASIER: CHILDREN, SEATED PLAY", 0.008f, 3);
   else if (optionNote.empty()) panel.add("LEFT HAND BLOCK ON THE LEFT, RIGHT HAND ON THE RIGHT", 0.009f, 3);
   else panel.add(optionNote, 0.012f, 4);
 }
@@ -470,16 +512,23 @@ void buildSelect() {
   panel.add(line, 0.014f, 1);
   if (!statusLine.empty()) panel.add(statusLine, 0.012f, 5);
   panel.add(" ", 0.01f);
-  panel.add("UP DOWN SONG   LEFT RIGHT LEVEL", 0.009f, 3);
-  panel.add("TRIANGLE NEW PATTERN   TRIGGER PLAY", 0.009f, 3);
+  if (showHints) {
+    panel.add("UP DOWN SONG   LEFT RIGHT LEVEL", 0.009f, 3);
+    panel.add("TRIANGLE NEW PATTERN   TRIGGER PLAY", 0.009f, 3);
+    panel.add("CIRCLE (OR LEFT SQUARE): BACK TO THE MENU AND OPTIONS", 0.009f, 3);
+  }
 }
 
 // pause menu rows.
 void buildPause() {
   panel.rows.clear();
   panel.add("PAUSED", 0.03f, 0);
-  const char *items[4] = {"RESUME", "RESTART", "SONG SELECT", "QUIT"};
+  const std::string items[4] = {"RESUME", "RESTART", "SONG SELECT", "QUIT"};
   for (int i = 0; i < 4; i++) panel.add(std::string(i == pauseSel ? "> " : "  ") + items[i], 0.018f, i == pauseSel ? 2 : 1);
+  if (showHints) {
+    panel.add(" ", 0.01f);
+    panel.add("CIRCLE RESUMES   R3 CENTRES THE VIEW", 0.009f, 3);
+  }
 }
 
 // rank (from rating), score, accuracy, hits/misses, new-best marker, then replay / new pattern / song select.
@@ -562,6 +611,7 @@ bool playSong(const library::Entry &e) {
   vr::recenter();  // the play area centres on where the player stands as the song starts
   userCentred = true;
   screen = Screen::Playing;
+  if (demoRun) autoplay = true;
   startSong();
   return true;
 }
@@ -572,12 +622,41 @@ void finishRun() {
   result.score = st.score, result.combo = st.maxCombo, result.hits = st.hits, result.misses = st.misses + st.badCuts;
   result.accuracy = session->maxScore() ? (float)(100.0 * st.score / session->maxScore()) : 0.0f;
   result.rating = scores::rating(result.accuracy, st.hits, (int)session->notes().size());
-  result.best = scores::record(songId, diff, result.score, result.accuracy, result.rating, result.combo);
+  result.best = !autoplay && scores::record(songId, diff, result.score, result.accuracy, result.rating, result.combo);  // a demo run keeps no score
   playing = false;
   resultSel = 0;
   screen = Screen::Results;
-  platform::log("game: finished %s %s: %ld, %.1f%%, rank %s%s", songTitle.c_str(), kDiffNames[diff], result.score, (double)result.accuracy, scores::rank(result.rating),
-                result.best ? " (new best)" : "");
+  platform::log("game: finished %s %s: %ld, %.1f%%, rank %s%s%s", songTitle.c_str(), kDiffNames[diff], result.score, (double)result.accuracy, scores::rank(result.rating),
+                result.best ? " (new best)" : "", autoplay ? " (demo, not recorded)" : "");
+}
+
+// title DEMO: a random song at a random level plays itself. false => nothing to play (titleNote says why).
+void startDemo() {
+  if (songs.empty()) {
+    titleNote = "NO SONGS FOUND";
+    return;
+  }
+  static uint32_t rng = 0;
+  rng = rng * 1664525u + 1013904223u + (uint32_t)(platform::seconds() * 1e6);
+  const size_t pick = (rng >> 8) % songs.size();
+  demoDiffBefore = diff;
+  diff = (int)((rng >> 4) & 3);
+  demoRun = true;
+  platform::log("game: demo %s %s", songs[pick].id.c_str(), kDiffNames[diff]);
+  if (!playSong(songs[pick])) {
+    demoRun = false, diff = demoDiffBefore, autoplay = restAutoplay;
+    titleNote = "COULD NOT READ THAT SONG";
+  }
+}
+
+// leaves the demo (a button, or the song ending) for the title; restores the level the song list had.
+void stopDemo() {
+  demoRun = false, paused = false, playing = false;
+  autoplay = restAutoplay;
+  diff = demoDiffBefore;
+  screen = Screen::Title;
+  effects.clear();
+  platform::log("game: demo ended");
 }
 
 // ---- drawing ----
@@ -601,7 +680,7 @@ void refreshPanel() {
 render::Scene sceneAt(double now) {
   render::Scene s;
   const bool inSong = screen == Screen::Playing || screen == Screen::Results;
-  s.now = now, s.diff = diff, s.sabers = sabers, s.effects = &effects, s.clock = platform::seconds();
+  s.now = now, s.diff = diff, s.plainSabers = plainSabers, s.sabers = sabers, s.effects = &effects, s.clock = platform::seconds();
   if (inSong && songLoaded) s.song = &song, s.downbeatPhase = song.downbeatPhase;
   if (screen == Screen::Playing) s.session = session.get();
   s.panel = havePanel ? &panel : nullptr;
@@ -654,8 +733,26 @@ void drawEyes(const vr::Frame &f, double now) {
     toScene(f.eye[e].pos, p);
     quatToScene(f.eye[e].quat, q);
     glViewport(e * eye, 0, eye, eye);
+    // Cull against where THIS eye really is: a player who steps or leans toward the field (small play areas bring the blocks closer)
+    // would otherwise have blocks and shards cross the eye plane, where GL does not clip and the triangles vanish.
+    sc.maxZ = p[2] - 0.3f;
     render::draw(frustum(f.eye[e].tan, 0.05f, 150.0f) * eyeView(p, q), sc, bg);
     static const double started = platform::seconds();
+    if (screen == Screen::Playing && autoplay && now < 5 && !paused) {
+      float p0[3], p1[3], hq[4];
+      toScene(f.eye[0].pos, p0);
+      toScene(f.eye[1].pos, p1);
+      quatToScene(f.eye[0].quat, hq);
+      const float mid[3] = {(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2};
+      render::hint(frustum(f.eye[e].tan, 0.05f, 150.0f) * eyeView(p, q), mid, hq, "DEMO: SIT BACK AND WATCH", "PRESS ANY BUTTON TO STOP");
+    } else if (showHints && screen == Screen::Playing && !autoplay && now < 5 && !paused) {
+      float p0[3], p1[3], hq[4];
+      toScene(f.eye[0].pos, p0);
+      toScene(f.eye[1].pos, p1);
+      quatToScene(f.eye[0].quat, hq);
+      const float mid[3] = {(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2};
+      render::hint(frustum(f.eye[e].tan, 0.05f, 150.0f) * eyeView(p, q), mid, hq, "TRIANGLE OR OPTIONS: PAUSE MENU", "R3: CENTRE THE VIEW");
+    }
     if (!userCentred && screen != Screen::Playing && platform::seconds() - started < 40) {
       float p0[3], p1[3], hq[4];
       toScene(f.eye[0].pos, p0);
@@ -761,7 +858,7 @@ int main(int argc, char **argv) {
   }
   platform::log("game: headset %s, blade along %s", vrOn ? "on" : vr::status(), kAxisNames[bladeAxis]);
   platform::notify(vrOn ? "Pulse: stick to move, trigger to choose" : "Pulse: no headset, TV view");
-  autoplay = forceBot || (!vrOn && !mouse);
+  autoplay = restAutoplay = forceBot || (!vrOn && !mouse);
 
   // A song named on the command line plays straight away, with its map as given: for tests and videos.
   if (mp3Path && mapPath) {
@@ -848,6 +945,7 @@ int main(int argc, char **argv) {
     vr::Frame f;
     const bool frame = vrOn && vr::begin(f);
     const bool inSong = screen == Screen::Playing;
+    if (vrOn) vr::vibrate(inSong && !paused && platform::seconds() < headUntil ? headLevel : 0.0f);
     // The bot's hands (the simulated headset follows them, so the hand-to-saber path is the one tested).
     if (inSong && autoplay)
       for (int c = 0; c < 2; c++) {
@@ -894,11 +992,13 @@ int main(int argc, char **argv) {
 
     switch (screen) {
       case Screen::Title:
-        step(titleSel, 4, nav);
+        step(titleSel, 5, nav);
         if (nav.select) {
+          titleNote.clear();
           if (titleSel == 0) screen = Screen::Select;
-          else if (titleSel == 1) screen = Screen::Help, helpPage = 0;
-          else if (titleSel == 2) screen = Screen::Options, optionSel = 0, optionNote.clear();
+          else if (titleSel == 1) startDemo();
+          else if (titleSel == 2) screen = Screen::Help, helpPage = 0;
+          else if (titleSel == 3) screen = Screen::Options, optionSel = 0, optionNote.clear();
           else quitRequested = true;
         }
         break;
@@ -908,7 +1008,7 @@ int main(int argc, char **argv) {
         if (nav.back || (nav.select && helpPage == kHelpPages - 1 && !nav.right)) screen = Screen::Title;
         break;
       case Screen::Options: {
-        step(optionSel, 7, nav);
+        step(optionSel, 10, nav);
         const int dir = (nav.right ? 1 : 0) - (nav.left ? 1 : 0);
         if (optionSel == 0 && (dir || nav.select)) {
           paletteId = (paletteId + (dir ? dir : 1) + render::paletteCount()) % render::paletteCount();
@@ -926,7 +1026,16 @@ int main(int argc, char **argv) {
           playHands = (playHands + (dir ? dir : 1) + 3) % 3;
           saveSettings();
           infoKey.clear();
-        } else if (optionSel == 5 && nav.select) {
+        } else if (optionSel == 5 && (dir || nav.select)) {
+          seated = !seated;
+          saveSettings();
+        } else if (optionSel == 6 && (dir || nav.select)) {
+          plainSabers = !plainSabers;
+          saveSettings();
+        } else if (optionSel == 7 && (dir || nav.select)) {
+          showHints = !showHints;
+          saveSettings();
+        } else if (optionSel == 8 && nav.select) {
           const std::string keep = songs.empty() ? "" : songs[songSel].id;
           songs = library::scan(dirs);
           songSel = 0;
@@ -935,7 +1044,7 @@ int main(int argc, char **argv) {
           artFor.clear();
           optionNote = songs.empty() ? "NO SONGS FOUND" : "FOUND " + std::to_string(songs.size()) + " SONGS";
           platform::log("game: rescan, %zu songs", songs.size());
-        } else if (optionSel == 6 && nav.select) {
+        } else if (optionSel == 9 && nav.select) {
           screen = Screen::Title;
         }
         if (nav.back) screen = Screen::Title;
@@ -958,7 +1067,13 @@ int main(int argc, char **argv) {
         }
         break;
       case Screen::Playing: {
-        if (nav.options) paused = !paused, pauseSel = 0, playing = !paused;
+        if (demoRun) {
+          // any button, trigger or stick push ends the demo
+          if (edge || nav.up || nav.down || nav.left || nav.right || nav.select || nav.back || nav.options || nav.reroll) {
+            stopDemo();
+            break;
+          }
+        } else if (nav.options) paused = !paused, pauseSel = 0, playing = !paused;
         if (paused) {
           step(pauseSel, 4, nav);
           if (nav.back) paused = false, playing = true;
@@ -979,9 +1094,15 @@ int main(int argc, char **argv) {
         if (now != lastNow) {
           session->update(now, sabers);
           for (const game::Event &e : session->takeEvents()) {
-            if (e.kind == game::Event::Hit) effects.push_back({e.pos, e.color, now}), click(now, e.color), vr::haptic(e.color, 0.6f);
-            else if (e.kind == game::Event::BadCut) effects.push_back({e.pos, 2, now}), vr::haptic(e.color, 0.3f);
+            if (e.kind == game::Event::Hit) effects.push_back({e.pos, e.color, now}), click(now, e.color), buzz(e.color, 0.6f);
+            else if (e.kind == game::Event::BadCut) effects.push_back({e.pos, 2, now}), buzz(e.color, 0.3f), autoplay ? void() : headBuzz(0.15f, 0.06);
             if (e.kind == game::Event::Miss || e.kind == game::Event::BadCut) logWhy(e);
+          }
+          game::Vec3 meet;
+          if (const float hard = clash.update(now, sabers, meet)) {
+            effects.push_back({meet, 2, now}), click(now, 2);
+            buzz(0, hard), buzz(1, hard);
+            headBuzz(0.25f + 0.45f * hard, 0.12);
           }
           if (effects.size() > 200) effects.erase(effects.begin(), effects.begin() + 100);
         }
@@ -989,7 +1110,7 @@ int main(int argc, char **argv) {
           nextReport = platform::seconds() + 5;
           if (now > 0) report(now);
         }
-        if (now > song.duration + 1) finishRun();
+        if (now > song.duration + 1) demoRun ? stopDemo() : finishRun();
         break;
       }
       case Screen::Results:

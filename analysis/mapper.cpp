@@ -8,6 +8,7 @@
 //   sideways swings (p.sideways) leave lastDown unchanged; drops open with a two-hand pair; Extreme adds same-time pairs;
 //   (4) styled(): remap dir codes by level. invariants (checked by validate()): time-ordered, hand gap >= 0.19 s,
 //   <= 1 lane per 0.1 s, no two notes in one cell at one time.
+//   (2b) gap fill: a gap over 4 s (Easy; 3.5/3/2.5 s above) between chosen slots gets a beat-aligned block about every second.
 // !: any change to stage logic or Profile values changes output => bump library::kMapperVersion (invalidates caches).
 #include "mapper.h"
 
@@ -174,6 +175,32 @@ Map build(const analysis::Result &r, Difficulty diff, Rng rng, int hands) {
   }
   std::sort(chosen.begin(), chosen.end());
   chosen.erase(std::remove_if(chosen.begin(), chosen.end(), [&](int i) { return slots[i].time < 2.0; }), chosen.end());
+
+  // No long empty stretches: a break or a quiet, sparse part still gets a block about every second, on the beat. (Seen on a real
+  // track: 29 s of nothing on Easy, where the break density rounds to zero.) Gaps over maxGap are filled from the beat slots.
+  {
+    const double maxGap = diff == Difficulty::Easy ? 4.0 : diff == Difficulty::Medium ? 3.5 : diff == Difficulty::Hard ? 3.0 : 2.5;
+    const double step = std::max(1.0, std::round(1.0 / beatLen)) * beatLen;  // whole beats, about a second
+    const double end = r.duration - 4.0;                                     // the outro may fade out unmapped
+    std::vector<int> fill;
+    auto fillBetween = [&](double a, double b) {
+      if (b - a <= maxGap) return;
+      for (double t = a + step; b - t > step * 0.6; t += step) {
+        int best = -1;
+        for (int i = 0; i < (int)slots.size(); i++)
+          if (slots[i].sub == 0 && (best < 0 || std::fabs(slots[i].time - t) < std::fabs(slots[best].time - t))) best = i;
+        if (best < 0 || slots[best].time <= a + step * 0.5 || slots[best].time >= b - step * 0.5) continue;
+        fill.push_back(best);
+        t = slots[best].time;
+      }
+    };
+    double prev = 2.0;
+    for (int i : chosen) fillBetween(prev, slots[i].time), prev = slots[i].time;
+    fillBetween(prev, end);
+    for (int i : fill) chosen.push_back(i);
+    std::sort(chosen.begin(), chosen.end());
+    chosen.erase(std::unique(chosen.begin(), chosen.end()), chosen.end());
+  }
 
   // Place the notes: hands alternate, swings alternate down and up, rows follow the pitch of the onset.
   int lastColor = 1;

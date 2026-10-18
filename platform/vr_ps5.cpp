@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "platform.h"
 #include "vmath.h"
@@ -62,6 +63,7 @@ struct PadVibration {
   uint8_t largeMotor, smallMotor;
 };
 int scePadSetVibration(int handle, const PadVibration *param);
+int scePadSetVibrationMode(int handle, int mode);  // 2 = compatible (large + small motor), as DualSense titles set it
 }
 
 namespace vr {
@@ -648,6 +650,35 @@ void submit() {
 // As Horizon opens the Sense controllers: a pad of type 3 (left) / 4 (right), registered with the
 // tracker as device 2 / 1 (0 is the headset). The SDK's libScePad stub lacks the VR read call, so it
 // is taken from the system module at run time.
+// ? haptics on the Sense controllers: scePadSetVibration/scePadSetVibrationMode answer 0x80920003 (invalid handle) on the type 3/4 pad
+// handles, in every mode (probed on hardware 2026-10-18). The SDK stub's libScePad lists VR calls only for reads and trigger effects, so
+// look in the console's own libScePad for any VR haptic export and log which names exist. Remove once the working call is known
+// (docs/SENSE-CONTROLLERS.md).
+// Staged, so the player can say which step buzzed: one step every 2.5 s starting 4 s after the controllers open (hapticTick runs them).
+// A buzz was felt at launch with the earlier all-at-once probe although every call reported an error; this finds which call does it.
+static int probeStep = -1;
+static uint64_t probeAt;
+static void probeHaptics() {
+  char path[128];
+  std::snprintf(path, sizeof path, "/%s/common/lib/libScePad.sprx", sceKernelGetFsSandboxRandomWord());
+  int res = 0;
+  const int h = sceKernelLoadStartModule(path, 0, nullptr, 0, nullptr, &res);
+  static const char *names[] = {"scePadVrControllerSetVibration", "scePadVrControllerSetVibrationMode", "scePadVrControllerSetHaptic",
+                                "scePadVrControllerSetHapticParam", "scePadVrControllerSetVibrationForce", "scePadVrControllerSetVibrationStrength",
+                                "scePadVrControllerSetTriggerEffect", "scePadVrControllerSetTriggerEffects", "scePadVrControllerRumble",
+                                "scePadVrControllerSetActuator", "scePadVrControllerWrite", "scePadVrControllerSetLightBar",
+                                "scePadSetVibrationForce", "scePadSetVibrationStrength", "scePadSetVrTrackingMode", "scePadVrControllerGetDeviceInformation",
+                                "scePadVrControllerRead", "scePadVrControllerReadCombinedState", "scePadSetVibrationMode", "scePadSetVibration"};
+  std::string found, absent;
+  for (const char *n : names) {
+    void *addr = nullptr;
+    ((sceKernelDlsym(h, n, &addr) == 0 && addr) ? found : absent) += std::string(" ") + n;
+  }
+  platform::log("vr: libScePad module handle 0x%x; exports present:%s", h, found.c_str());
+  platform::log("vr: libScePad exports absent:%s", absent.c_str());
+  probeStep = 0, probeAt = sceKernelGetProcessTime() + 4000000;
+}
+
 void openHands() {
   if (g.padOpened || !g.loaded) return;
   g.padOpened = true;
@@ -657,6 +688,7 @@ void openHands() {
     g.padRegistered[side] = r == 0;
     platform::log("vr: %s controller pad 0x%x, tracker register 0x%08x", side ? "right" : "left", g.padHandle[side], r);
   }
+  probeHaptics();
 }
 
 const char *status() { return g.status; }
@@ -732,6 +764,18 @@ void haptic(int side, float strength) {
 // Stops any buzz whose time is up. Called at the start of each frame.
 static void hapticTick() {
   const uint64_t now = sceKernelGetProcessTime();
+  if (probeStep >= 0 && probeStep < 4 && now >= probeAt) {
+    static const char *what[4] = {"vibration mode 2", "vibration mode 1", "vibration 200 on", "vibration 0 off"};
+    int rc[2] = {0, 0};
+    for (int side = 0; side < 2; side++) {
+      const int h = g.padHandle[side];
+      const PadVibration v{(uint8_t)(probeStep == 2 ? 200 : 0), (uint8_t)(probeStep == 2 ? 200 : 0)};
+      rc[side] = h < 0 ? -1 : probeStep == 0 ? scePadSetVibrationMode(h, 2) : probeStep == 1 ? scePadSetVibrationMode(h, 1) : scePadSetVibration(h, &v);
+    }
+    platform::log("vr: haptic probe step %d (%s): left 0x%08x right 0x%08x", probeStep + 1, what[probeStep], (unsigned)rc[0], (unsigned)rc[1]);
+    probeAt = now + 2500000;
+    probeStep++;
+  }
   for (int s = 0; s < 2; s++)
     if (hapticOn[s] && now >= hapticStop[s]) {
       const PadVibration off{0, 0};

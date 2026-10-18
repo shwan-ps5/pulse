@@ -415,15 +415,21 @@ void noteCube(const Mat4 &vp, const Mat4 &base, float size, int color, int dir, 
   }
 }
 
+// How far in front of the eye plane a point is (metres): clip-space w of the perspective projection, so it follows the head's TURN as well as
+// its position. ! GL does not clip at the eye plane on the console: a triangle or line with any corner behind it vanishes whole, so anything
+// big near the head (long ring edges, lane and beat lines, a block or shard passing the head) is cut into short pieces and dropped when one
+// is nearer than a margin. ref: the menu plate (tiled for the same reason).
+float eyeDist(const Mat4 &vp, float x, float y, float z) { return vp.m[3] * x + vp.m[7] * y + vp.m[11] * z + vp.m[15]; }
+
 // one note in flight: position from (lane,row,time-now)*speed, grows in over its first 0.25 s, fogs with distance, culled
-// beyond the horizon, past hitZ+0.12 s, and when z > s.maxZ (so nothing flies through the headset at the eye plane).
+// beyond the horizon, past hitZ+0.12 s, and when any of it would pass s.maxZ (so nothing flies through the headset at the eye plane).
 void noteBox(const mapper::Note &n, const game::Config &cfg, const Scene &s, const Mat4 &vp, const float bg[3]) {
   const double dt = n.time - s.now;
   const double horizon = (80.0 + cfg.hitZ) / s.speed;
   if (dt > horizon || dt < -0.12) return;
   const float x = (n.lane - 1.5f) * cfg.laneW, y = cfg.row0 + n.row * cfg.rowH, z = cfg.hitZ - (float)dt * s.speed;
-  if (z > s.maxZ) return;
   float grow = (float)std::min(1.0, (horizon - dt) / 0.25), size = cfg.noteSize * (0.3f + 0.7f * grow);
+  if (z + 0.5f * size > s.maxZ || eyeDist(vp, x, y, z) < 0.9f * size + 0.15f) return;  // the whole block must stay in front of the eye plane (see eyeDist)
   float fog = std::min(1.0f, (float)(dt / horizon)) * 0.85f;
   noteCube(vp, translation(x, y, z), size, n.color, n.dir, fog, bg);
 }
@@ -688,8 +694,19 @@ void drawRings(const Mat4 &vp, const Scene &s, const float bg[3]) {
     for (int e = 0; e < m.sides; e++) {
       const float a0 = spin + 6.2831853f * e / m.sides, a1 = spin + 6.2831853f * (e + 1) / m.sides;
       const float x0 = r * std::sin(a0), y0 = 1.4f + r * std::cos(a0), x1 = r * std::sin(a1), y1 = 1.4f + r * std::cos(a1);
-      const float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
-      edges.push_back({translation((x0 + x1) / 2, (y0 + y1) / 2, z) * rotZ(std::atan2(y1 - y0, x1 - x0)) * scale(len + 0.08f, 1, 1), {c[0], c[1], c[2]}});
+      const float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)), ang = std::atan2(y1 - y0, x1 - x0);
+      // An edge that is clearly in front goes in whole; one that nears the eye plane (a ring passing the head, or the head turned
+      // toward its far side) is cut into 0.4 m pieces and the pieces too close to that plane are dropped.
+      if (eyeDist(vp, x0, y0, z) > 0.8f && eyeDist(vp, x1, y1, z) > 0.8f) {
+        edges.push_back({translation((x0 + x1) / 2, (y0 + y1) / 2, z) * rotZ(ang) * scale(len + 0.08f, 1, 1), {c[0], c[1], c[2]}});
+        continue;
+      }
+      const int pieces = std::max(1, (int)std::ceil(len / 0.4f));
+      for (int k = 0; k < pieces; k++) {
+        const float u = (k + 0.5f) / pieces, px = x0 + (x1 - x0) * u, py = y0 + (y1 - y0) * u;
+        if (eyeDist(vp, px, py, z) < 0.5f) continue;
+        edges.push_back({translation(px, py, z) * rotZ(ang) * scale(len / pieces + 0.08f, 1, 1), {c[0], c[1], c[2]}});
+      }
     }
   }
   glEnable(GL_DEPTH_TEST);
@@ -854,7 +871,18 @@ void draw(const Mat4 &vp, const Scene &s, const float bg[3]) {
   Lines lines;
   const float dim[3] = {0.18f, 0.2f, 0.28f}, bright[3] = {0.55f, 0.6f, 0.8f}, bar4[3] = {0.9f, 0.9f, 1.0f};
   const float kHitZ = cfg.hitZ, kLaneW = cfg.laneW;
-  for (int i = 0; i <= 4; i++) lines.add((i - 2) * kLaneW, 0, kHitZ, (i - 2) * kLaneW, 0, -80, dim);
+  // line pieces: a line with an end behind the eye plane vanishes whole, so long and wide lines are cut up and the near pieces dropped
+  auto addLine = [&](float ax, float az, float bx, float bz, const float col[3], float piece) {
+    const float len = std::sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az));
+    const int n = std::max(1, (int)std::ceil(len / piece));
+    for (int k = 0; k < n; k++) {
+      const float u0 = (float)k / n, u1 = (float)(k + 1) / n;
+      const float x0 = ax + (bx - ax) * u0, z0 = az + (bz - az) * u0, x1 = ax + (bx - ax) * u1, z1 = az + (bz - az) * u1;
+      if (eyeDist(vp, x0, 0, z0) < 0.3f || eyeDist(vp, x1, 0, z1) < 0.3f) continue;
+      lines.add(x0, 0, z0, x1, 0, z1, col);
+    }
+  };
+  for (int i = 0; i <= 4; i++) addLine((i - 2) * kLaneW, kHitZ, (i - 2) * kLaneW, -80, dim, 4.0f);
   if (s.song)
     for (size_t i = 0; i < s.song->beats.size(); i++) {
       const double dt = s.song->beats[i] - s.now;
@@ -863,7 +891,7 @@ void draw(const Mat4 &vp, const Scene &s, const float bg[3]) {
       if (z > s.maxZ) continue;
       const bool down = (int)i % 4 == s.downbeatPhase;
       const float c[3] = {(down ? bar4[0] : dim[0]) * fade, (down ? bar4[1] : dim[1]) * fade, (down ? bar4[2] : dim[2]) * fade};
-      lines.add(-2 * kLaneW, 0, z, 2 * kLaneW, 0, z, c);
+      addLine(-2 * kLaneW, z, 2 * kLaneW, z, c, 0.25f);
     }
   if (s.panel) lines.v.clear();
   glNamedBufferSubData(gfx.lineVbo, 0, std::min(lines.v.size() * 4, (size_t)(4 << 20)), lines.v.data());
@@ -896,7 +924,8 @@ void draw(const Mat4 &vp, const Scene &s, const float bg[3]) {
       const float size = 0.14f * (1 - age / 0.45f);
       for (const auto &c : corner) {
         const float z = f.pos.z + c[2] * age * 0.8f + age * 1.2f;
-        if (z > s.maxZ) continue;
+        const float sx = f.pos.x + c[0] * age * 1.4f, sy = f.pos.y + c[1] * age * 1.4f - age * age * 2;
+        if (z + size > s.maxZ || eyeDist(vp, sx, sy, z) < 1.8f * size + 0.15f) continue;  // as for blocks: a shard poking behind the eye plane would vanish
         solid(vp, translation(f.pos.x + c[0] * age * 1.4f, f.pos.y + c[1] * age * 1.4f - age * age * 2, z) * scale(size, size, size), gfx.cubeVao, 36,
               shardColour[f.color], 1.0f, 0.0f, bg);
       }
@@ -924,16 +953,18 @@ void draw(const Mat4 &vp, const Scene &s, const float bg[3]) {
       // Wider additive shells that fade out for the glow, then the core on top.
       const int h = hand(c);
       const float *glowColour = pal().glow[h];
-      glEnable(GL_BLEND);
-      glBlendFunc(GL_ONE, GL_ONE);
-      glDepthMask(GL_FALSE);
-      static const float shell[4][2] = {{0.045f, 0.55f}, {0.075f, 0.28f}, {0.12f, 0.14f}, {0.19f, 0.07f}};
-      for (const auto &sh : shell) {
-        const float col[3] = {glowColour[0] * sh[1], glowColour[1] * sh[1], glowColour[2] * sh[1]};
-        solid(vp, at * scale(sh[0], sh[0], len + sh[0] * 0.5f), gfx.cylVao, kCylVerts, col, 0.0f, 0.0f, bg);
+      if (!s.plainSabers) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);
+        glDepthMask(GL_FALSE);
+        static const float shell[4][2] = {{0.045f, 0.55f}, {0.075f, 0.28f}, {0.12f, 0.14f}, {0.19f, 0.07f}};
+        for (const auto &sh : shell) {
+          const float col[3] = {glowColour[0] * sh[1], glowColour[1] * sh[1], glowColour[2] * sh[1]};
+          solid(vp, at * scale(sh[0], sh[0], len + sh[0] * 0.5f), gfx.cylVao, kCylVerts, col, 0.0f, 0.0f, bg);
+        }
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
       }
-      glDepthMask(GL_TRUE);
-      glDisable(GL_BLEND);
       const float boost = s.hdr ? 2.2f : 1.0f, hot[3] = {pal().core[h][0] * boost, pal().core[h][1] * boost, pal().core[h][2] * boost};
       solid(vp, at * scale(pal().coreW[h], pal().coreW[h], len), gfx.cylVao, kCylVerts, hot, 0.0f, 0.0f, bg);
       Mat4 hilt = translation(b.x + fz[0] * 0.08f, b.y + fz[1] * 0.08f, b.z + fz[2] * 0.08f) * r;

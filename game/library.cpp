@@ -229,7 +229,7 @@ std::vector<Entry> scan(const std::vector<std::string> &dirs) {
   return list;
 }
 
-// map cache file for (song, seed, hands) at the current kMapperVersion: <id>.v3.s1.pulse, one-handed maps <id>.v3.s1.h1.pulse.
+// map cache file for (song, seed, hands) at the current kMapperVersion: <id>.v4.s1.pulse, one-handed maps <id>.v4.s1.h1.pulse.
 std::string cachePath(const Entry &e, const std::string &cacheDir, int seed, int hands) {
   char buf[56];
   if (hands) std::snprintf(buf, sizeof buf, ".v%d.s%d.h%d.pulse", kMapperVersion, seed, hands);

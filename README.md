@@ -42,10 +42,14 @@ R3 to centre it (a hint shows until you do). **How to play** in the title menu e
 
 A cut scores up to 115 times the multiplier (x2 at 2 in a row, x4 at 6, x8 at 14); a miss or a bad cut resets it. The rank is out of 100, half the share of blocks hit and half the score, so a few misses do not sink it: S 90 and up, A 80, B 70, C 50, D 40, E 30, and F below that.
 The saber is longer on the easier levels for more reach (1.3 m Easy, 1.2 Medium, 1.1 Hard, 1.0 Extreme). Triangle on the song list picks a new pattern for a song. Options has colour-blind and high-contrast palettes, a
-hand swap, the background (off, flat or 3D) and the play area: standard, compact or small, which bring the lanes, rows and blocks
-closer together for shorter players, children, seated play or tight spaces; and Hands (both, left only, right only) for one-handed
+hand swap, the background (off, flat or 3D), the play area (normal 2.0 m, medium 1.7 m or small 1.4 m wide, which bring the lanes, rows and blocks
+closer together and make the game easier: shorter players, children, seated play, tight spaces), seated mode (the field drops to chair height and the rows sit closer, so no reach above the head), the saber glow (off leaves bare blades lit only by the bloom), the button hints (menu footers and the pause reminder at the start of a song); and Hands (both, left only, right only) for one-handed
 play, which generates maps for one hand (its three lanes, every block its colour, longer rests between swings, no pairs) with their own
 scores. The play area re-centres on where you stand at the start of each song.
+
+Demo (on the title screen) picks a random song and level and lets the game play itself; any button stops it: the bot's hands bounce to the beat, swing in arcs,
+lean the blade into each cut and miss a few, so you can show it off without holding the controllers. Demo runs keep no score and cannot be taken over.
+When the two blades touch there are sparks, a clink and a buzz in both controllers, harder the faster they met.
 
 ## Building
 

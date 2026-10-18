@@ -21,7 +21,7 @@ std::vector<Entry> scan(const std::vector<std::string> &dirs);
 bool scanIndex(const std::string &dir, std::vector<Entry> &list);
 
 // Bumped when the mapper changes what it makes, so old cached maps are not used.
-constexpr int kMapperVersion = 3;
+constexpr int kMapperVersion = 4;
 
 // What the song select screen shows for a song whose map is already cached.
 struct Info {
