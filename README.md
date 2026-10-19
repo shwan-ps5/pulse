@@ -15,13 +15,13 @@ https://github.com/user-attachments/assets/8df9ad8c-bab9-4f40-aa5a-029f4efdc64f
 
 https://github.com/user-attachments/assets/440491c6-80c6-482c-9823-6607f0f54336
 
-Some videos to give you an idea of how it looks / plays.
+Some videos to give you an idea of how it looks / plays. The music in them is "Neon Run", an original track synthesised by a script in this repo (`tools/makedemo.py`), so there is no copyrighted music in the footage. In the second clip the soundtrack was added afterwards, so it does not follow the cuts exactly.
 
 Title ID `PPSA99993`. Needs a jailbroken PS5 running ShadowMountPlus (or another way to mount native app folders).
 
 ## Install
 
-No release has been published yet: it is still in testing. Until then, build the zip yourself with `bash ps5/release.sh` (see Building).
+The latest beta is on the [Releases page](https://github.com/shwan-ps5/pulse/releases): download `Pulse-01.000.000.zip` (check it against the SHA-256 in the release notes). It is a beta: tested on one PS5 with a PS VR2, so reports from other setups are welcome. Or build the zip yourself with `bash ps5/release.sh` (see Building).
 
 1. Copy the `PPSA99993` folder from the release zip to your mounted app location (for example `/mnt/usb0/PPSA99993`).
 2. Start the jailbreak and mount it as usual, then launch Pulse from the home screen.
