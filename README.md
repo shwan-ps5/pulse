@@ -11,6 +11,12 @@ on the console, in a few seconds. The neon backgrounds and bloom follow the musi
 
 Screenshots from the headset view on a PS5 (scaled down from the 1080p captures).
 
+https://github.com/user-attachments/assets/8df9ad8c-bab9-4f40-aa5a-029f4efdc64f
+
+https://github.com/user-attachments/assets/440491c6-80c6-482c-9823-6607f0f54336
+
+Some videos to give you an idea of how it looks / plays.
+
 Title ID `PPSA99993`. Needs a jailbroken PS5 running ShadowMountPlus (or another way to mount native app folders).
 
 ## Install
