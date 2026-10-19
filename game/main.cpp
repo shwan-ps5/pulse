@@ -438,6 +438,8 @@ void buildHelp() {
     line("OPTIONS: COLOUR-BLIND PALETTES, BACKGROUND, RESCAN,");
     line("PLAY AREA: A SMALLER, EASIER FIELD (WIDTH IN METRES)");
     line("HANDS: LEFT OR RIGHT ONLY. SEATED: A LOWER FIELD");
+    line("THE PS5 STILL NEEDS BOTH CONTROLLERS ON: PUT");
+    line("THE SPARE DOWN AND PULSE PLAYS WITH ONE");
   }
   panel.add(" ", 0.008f);
   panel.add(std::string("LEFT RIGHT PAGE ") + std::to_string(helpPage + 1) + "/" + std::to_string(kHelpPages) + "     BACK TO RETURN", 0.009f, 3);

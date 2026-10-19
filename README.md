@@ -4,6 +4,13 @@ A Beat Saber-style rhythm game for the jailbroken PS5 with PS VR2 and Sense cont
 analyses the song (tempo, beats, build-ups and drops) and cuts Easy, Medium, Hard and Extreme note maps from it,
 on the console, in a few seconds. The neon backgrounds and bloom follow the music.
 
+| | |
+|---|---|
+| ![Arrow blocks on Hard, glowing sabers](docs/media/pulse-cut-arrows.jpg) | ![Fractal background with a triangle of rings](docs/media/pulse-fractal-triangle.jpg) |
+| ![Pentagon rings and a score](docs/media/pulse-hard-pentagon.jpg) | ![A long combo in cyan rings](docs/media/pulse-combo.jpg) |
+
+Screenshots from the headset view on a PS5 (scaled down from the 1080p captures).
+
 Title ID `PPSA99993`. Needs a jailbroken PS5 running ShadowMountPlus (or another way to mount native app folders).
 
 ## Install
@@ -45,7 +52,7 @@ The saber is longer on the easier levels for more reach (1.3 m Easy, 1.2 Medium,
 hand swap, the background (off, flat or 3D), the play area (normal 2.0 m, medium 1.7 m or small 1.4 m wide, which bring the lanes, rows and blocks
 closer together and make the game easier: shorter players, children, seated play, tight spaces), seated mode (the field drops to chair height and the rows sit closer, so no reach above the head), the saber glow (off leaves bare blades lit only by the bloom), the button hints (menu footers and the pause reminder at the start of a song); and Hands (both, left only, right only) for one-handed
 play, which generates maps for one hand (its three lanes, every block its colour, longer rests between swings, no pairs) with their own
-scores. The play area re-centres on where you stand at the start of each song.
+scores. The PS5 itself still wants both Sense controllers connected and charged before a VR title will run; the spare one can be put down and Pulse plays with the other. The play area re-centres on where you stand at the start of each song.
 
 Demo (on the title screen) picks a random song and level and lets the game play itself; any button stops it: the bot's hands bounce to the beat, swing in arcs,
 lean the blade into each cut and miss a few, so you can show it off without holding the controllers. Demo runs keep no score and cannot be taken over.
